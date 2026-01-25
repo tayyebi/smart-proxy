@@ -2,12 +2,39 @@
 import socket, threading, time, os, struct, fcntl, logging, json, sys, signal
 from cmd import Cmd
 import dns.resolver
+from collections import deque
+import subprocess
 
 # -----------------------------
 # LOGGING
 # -----------------------------
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s")
+LOG_QUEUE = deque(maxlen=1000)
+
+class QueueHandler(logging.Handler):
+    def emit(self, record):
+        msg = self.format(record)
+        LOG_QUEUE.append(msg)
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+queue_handler = QueueHandler()
+queue_handler.setFormatter(formatter)
+logger.addHandler(queue_handler)
+
+# Optional: log to systemd journal if run as a service
+try:
+    import systemd.journal
+    journal_handler = systemd.journal.JournalHandler()
+    journal_handler.setFormatter(formatter)
+    logger.addHandler(journal_handler)
+except ImportError:
+    pass  # Not running in systemd
 
 # -----------------------------
 # CONFIGURATION
@@ -45,8 +72,8 @@ config = load_config()
 # IN-MEMORY CACHE
 # -----------------------------
 dns_cache = {}
-latency_cache = {}  # {(host, port): runway_info}
-runways = {}        # {(iface, proxy_host, proxy_port, dns_ip): latency}
+latency_cache = {}
+runways = {}
 
 # -----------------------------
 # NETWORK HELPERS
@@ -197,6 +224,7 @@ def handle_client(client):
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             threading.Thread(target=relay, args=(client, s), daemon=True).start()
             threading.Thread(target=relay, args=(s, client), daemon=True).start()
+            logging.info(f"Proxy via upstream {up_host}:{up_port} latency={latency:.3f}s")
         else:
             src_ip = get_iface_ip(iface)
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -206,6 +234,7 @@ def handle_client(client):
             upstream.connect((ip, port))
             threading.Thread(target=relay, args=(client, upstream), daemon=True).start()
             threading.Thread(target=relay, args=(upstream, client), daemon=True).start()
+            logging.info(f"Direct proxy iface={iface} ip={ip} latency={latency:.3f}s")
     except:
         try: client.close()
         except: pass
@@ -253,11 +282,22 @@ class ProxyCLI(Cmd):
     intro = "Proxy CLI - type help or ?"
     prompt = "(proxy) "
 
+    def do_show_logs(self, arg):
+        """
+        Show live logs with pager.
+        Usage: show_logs [num_lines]
+        Default num_lines = 100
+        """
+        try:
+            num = int(arg) if arg else 100
+        except:
+            num = 100
+        lines = list(LOG_QUEUE)[-num:]
+        pager = os.environ.get("PAGER", "less")
+        p = subprocess.Popen(pager, stdin=subprocess.PIPE, shell=True)
+        p.communicate(input="\n".join(lines).encode())
+
     def do_show_runways(self, arg):
-        "Show all current runways and latencies"
-        if not runways:
-            print("No runways built yet")
-            return
         for k,v in runways.items():
             print(f"{k}: {v:.3f}s")
 
