@@ -27,20 +27,18 @@ queue_handler = QueueHandler()
 queue_handler.setFormatter(formatter)
 logger.addHandler(queue_handler)
 
-# Optional: log to systemd journal if run as a service
 try:
     import systemd.journal
     journal_handler = systemd.journal.JournalHandler()
     journal_handler.setFormatter(formatter)
     logger.addHandler(journal_handler)
 except ImportError:
-    pass  # Not running in systemd
+    pass  # systemd not available
 
 # -----------------------------
 # CONFIGURATION
 # -----------------------------
 CONFIG_FILE = "proxy_config.json"
-
 DEFAULT_CONFIG = {
     "dns_servers": [
         "1.1.1.1", "8.8.8.8", "2.189.44.44", "2.188.21.130",
@@ -69,11 +67,12 @@ def save_config(config):
 config = load_config()
 
 # -----------------------------
-# IN-MEMORY CACHE
+# IN-MEMORY STATE
 # -----------------------------
-dns_cache = {}
-latency_cache = {}
-runways = {}
+dns_cache = {}               # domain -> list of resolved IPs
+runways = {}                 # (iface, proxy_host, proxy_port, dns) -> {"status": bool, "last": t, "next": t}
+latency_records = {}         # (domain, runway_key) -> last latency in seconds
+prev_status = {}             # track previous runway status to log changes
 
 # -----------------------------
 # NETWORK HELPERS
@@ -110,7 +109,8 @@ def resolve_domain(domain, dns_ip):
         r.timeout = 1
         r.lifetime = 1
         return [a.address for a in r.resolve(domain, "A")]
-    except: return []
+    except:
+        return []
 
 # -----------------------------
 # TCP / PROXY PROBES
@@ -145,41 +145,58 @@ def proxy_probe(proxy_host, proxy_port, target_host, target_port):
     except: return None
 
 # -----------------------------
-# RUNWAY SELECTION
+# RUNWAY BUILDING AND LATENCY
 # -----------------------------
 MODES = ["first_match", "lowest_latency"]
 current_mode = "lowest_latency"
 
 def build_runways(host, port):
+    """Rebuild all runways for host:port with status"""
     global runways
     runways.clear()
     ifaces = get_interfaces()
+    now = time.time()
     for dns_ip in config.get("dns_servers", []):
         ips = resolve_domain(host, dns_ip)
+        dns_cache[host] = ips
+        if not ips:
+            logger.warning(f"No IPs resolved for {host} using {dns_ip}")
+            continue
         for ip in ips:
             for iface in ifaces:
+                # direct runway
                 latency = tcp_probe(ip, port, iface)
+                key = (iface, None, None, dns_ip)
+                status = latency is not None
+                runways[key] = {"status": status, "last": now, "next": now+5}
                 if latency is not None:
-                    key = (iface, None, None, dns_ip)
-                    runways[key] = latency
-            for up in config.get("upstream_proxies", []):
-                latency = proxy_probe(up["host"], up["port"], host, port)
-                if latency is not None:
-                    key = (None, up["host"], up["port"], dns_ip)
-                    runways[key] = latency
+                    latency_records[(host, key)] = latency
+                if prev_status.get(key) != status:
+                    logger.info(f"Runway {key} status changed: {'UP' if status else 'DOWN'}")
+                    prev_status[key] = status
+                # upstream proxy runways
+                for up in config.get("upstream_proxies", []):
+                    latency = proxy_probe(up["host"], up["port"], host, port)
+                    key = (iface, up["host"], up["port"], dns_ip)
+                    status = latency is not None
+                    runways[key] = {"status": status, "last": now, "next": now+5}
+                    if latency is not None:
+                        latency_records[(host, key)] = latency
+                    if prev_status.get(key) != status:
+                        logger.info(f"Runway {key} status changed: {'UP' if status else 'DOWN'}")
+                        prev_status[key] = status
 
 def select_runway(host, port):
-    cache_key = (host, port)
-    if cache_key in latency_cache:
-        return latency_cache[cache_key]
+    """Select runway based on mode and update latency records"""
     build_runways(host, port)
-    if not runways: return None
+    available = [(k,v) for k,v in runways.items() if v["status"]]
+    if not available:
+        return None
     if current_mode == "first_match":
-        best = next(iter(runways.items()))
+        key, _ = available[0]
     else:
-        best = min(runways.items(), key=lambda x: x[1])
-    latency_cache[cache_key] = best
-    return best
+        key, _ = min(available, key=lambda x: latency_records.get((host, x[0]), float('inf')))
+    return key
 
 # -----------------------------
 # RELAY
@@ -208,12 +225,21 @@ def handle_client(client):
             return
         host, port = req.split()[1].split(":")
         port = int(port)
-        runway_entry = select_runway(host, port)
-        if not runway_entry:
+        runway_key = select_runway(host, port)
+        if not runway_key:
+            logger.warning(f"No available runway for {host}:{port}")
             client.close()
             return
-        (iface, up_host, up_port, dns_ip), latency = runway_entry
+        iface, up_host, up_port, dns_ip = runway_key
+        ips = resolve_domain(host, dns_ip)
+        if not ips:
+            logger.error(f"DNS failed for {host} on {dns_ip}")
+            client.close()
+            return
+        ip = ips[0]
+
         if up_host:
+            # connect via upstream proxy
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect((up_host, up_port))
             s.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
@@ -224,18 +250,17 @@ def handle_client(client):
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             threading.Thread(target=relay, args=(client, s), daemon=True).start()
             threading.Thread(target=relay, args=(s, client), daemon=True).start()
-            logging.info(f"Proxy via upstream {up_host}:{up_port} latency={latency:.3f}s")
         else:
+            # direct connection
             src_ip = get_iface_ip(iface)
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-            ip = resolve_domain(host, dns_ip)[0]
             upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            upstream.bind((src_ip, 0))
+            upstream.bind((src_ip,0))
             upstream.connect((ip, port))
             threading.Thread(target=relay, args=(client, upstream), daemon=True).start()
             threading.Thread(target=relay, args=(upstream, client), daemon=True).start()
-            logging.info(f"Direct proxy iface={iface} ip={ip} latency={latency:.3f}s")
-    except:
+    except Exception:
+        logger.exception("Client handling failed")
         try: client.close()
         except: pass
 
@@ -255,7 +280,7 @@ class ProxyServer(threading.Thread):
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.bind_ip, self.port))
         self.sock.listen(1024)
-        logging.info(f"Smart Proxy running on {self.bind_ip}:{self.port}")
+        logger.info(f"Smart Proxy running on {self.bind_ip}:{self.port}")
         while self.running:
             try:
                 self.sock.settimeout(1.0)
@@ -265,75 +290,77 @@ class ProxyServer(threading.Thread):
                 continue
             except Exception as e:
                 if self.running:
-                    logging.exception(e)
+                    logger.exception(e)
 
     def stop(self):
         self.running = False
         if self.sock:
             try:
                 self.sock.close()
-                logging.info("Proxy socket closed")
+                logger.info("Proxy socket closed")
             except: pass
 
 # -----------------------------
 # CLI
 # -----------------------------
 class ProxyCLI(Cmd):
-    intro = "Proxy CLI - type help or ?"
+    intro = "Smart Proxy CLI. Type help or ?"
     prompt = "(proxy) "
 
     def do_show_logs(self, arg):
-        """
-        Show live logs with pager.
-        Usage: show_logs [num_lines]
-        Default num_lines = 100
-        """
-        try:
-            num = int(arg) if arg else 100
-        except:
-            num = 100
-        lines = list(LOG_QUEUE)[-num:]
-        pager = os.environ.get("PAGER", "less")
+        """show_logs [num] - Show last N log lines (default 100)"""
+        try: n = int(arg) if arg else 100
+        except: n = 100
+        lines = list(LOG_QUEUE)[-n:]
+        pager = os.environ.get("PAGER","less")
         p = subprocess.Popen(pager, stdin=subprocess.PIPE, shell=True)
         p.communicate(input="\n".join(lines).encode())
 
     def do_show_runways(self, arg):
+        """show_runways - Show all runways with status"""
         for k,v in runways.items():
-            print(f"{k}: {v:.3f}s")
+            print(f"{k}: {'UP' if v['status'] else 'DOWN'} last:{time.ctime(v['last'])} next:{time.ctime(v['next'])}")
 
     def do_show_latency(self, arg):
-        for k,v in latency_cache.items():
-            print(f"{k}: {v}")
+        """show_latency - Show last latency per domain and runway"""
+        for (domain,key),lat in latency_records.items():
+            print(f"{domain} via {key}: {lat:.3f}s")
 
-    def do_show_dns(self, arg):
+    def do_show_dns(self,arg):
+        """show_dns - Show cached DNS entries"""
         for domain, ips in dns_cache.items():
             print(f"{domain}: {ips}")
 
-    def do_purge_dns(self, domain):
-        if domain in dns_cache:
-            del dns_cache[domain]
-            print(f"Purged DNS cache for {domain}")
+    def do_purge_dns(self,arg):
+        """purge_dns domain - Remove DNS cache"""
+        if arg in dns_cache:
+            del dns_cache[arg]
+            print(f"Purged DNS cache for {arg}")
 
-    def do_add_dns(self, ip):
-        if ip and ip not in config["dns_servers"]:
-            config["dns_servers"].append(ip)
+    def do_add_dns(self,arg):
+        """add_dns ip - Add a DNS server"""
+        if arg and arg not in config["dns_servers"]:
+            config["dns_servers"].append(arg)
             save_config(config)
-            print(f"Added DNS server {ip}")
+            print(f"Added DNS {arg}")
 
-    def do_remove_dns(self, ip):
-        if ip in config["dns_servers"]:
-            config["dns_servers"].remove(ip)
+    def do_remove_dns(self,arg):
+        """remove_dns ip - Remove a DNS server"""
+        if arg in config["dns_servers"]:
+            config["dns_servers"].remove(arg)
             save_config(config)
-            print(f"Removed DNS server {ip}")
+            print(f"Removed DNS {arg}")
 
-    def do_show_dns_servers(self, arg):
-        print(config.get("dns_servers", []))
+    def do_show_dns_servers(self,arg):
+        """show_dns_servers - List DNS servers"""
+        print(config.get("dns_servers",[]))
 
-    def do_add_upstream(self, arg):
+    def do_add_upstream(self,arg):
+        """add_upstream host port - Add an upstream proxy"""
         try:
-            host, port = arg.split()
+            host,port = arg.split()
             port = int(port)
-            entry = {"host": host, "port": port}
+            entry = {"host":host,"port":port}
             if entry not in config["upstream_proxies"]:
                 config["upstream_proxies"].append(entry)
                 save_config(config)
@@ -341,11 +368,12 @@ class ProxyCLI(Cmd):
         except:
             print("Usage: add_upstream host port")
 
-    def do_remove_upstream(self, arg):
+    def do_remove_upstream(self,arg):
+        """remove_upstream host port - Remove an upstream proxy"""
         try:
-            host, port = arg.split()
+            host,port = arg.split()
             port = int(port)
-            entry = {"host": host, "port": port}
+            entry = {"host":host,"port":port}
             if entry in config["upstream_proxies"]:
                 config["upstream_proxies"].remove(entry)
                 save_config(config)
@@ -353,18 +381,52 @@ class ProxyCLI(Cmd):
         except:
             print("Usage: remove_upstream host port")
 
-    def do_show_upstreams(self, arg):
-        for up in config.get("upstream_proxies", []):
+    def do_show_upstreams(self,arg):
+        """show_upstreams - Show upstream proxies"""
+        for up in config.get("upstream_proxies",[]):
             print(up)
 
-    def do_set_mode(self, mode):
+    def do_set_mode(self,arg):
+        """set_mode first_match|lowest_latency - Set selection mode"""
         global current_mode
-        if mode in MODES:
-            current_mode = mode
-            print(f"Mode set to {mode}")
+        if arg in MODES:
+            current_mode = arg
+            print(f"Mode set to {arg}")
 
-    def do_exit(self, arg):
-        print("Exiting CLI")
+    def do_route_monitor(self,arg):
+        """route_monitor - Live runway status monitor"""
+        try:
+            import curses
+        except ImportError:
+            print("curses required")
+            return
+        def draw(stdscr):
+            curses.curs_set(0)
+            curses.start_color()
+            curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
+            curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)
+            stdscr.nodelay(True)
+            while True:
+                stdscr.clear()
+                stdscr.addstr(0,0,"Live Runway Monitor (press 'q' to exit)")
+                row = 2
+                for k,v in runways.items():
+                    status = "●" if v['status'] else "○"
+                    color = curses.color_pair(2) if v['status'] else curses.color_pair(1)
+                    stdscr.addstr(row,0,status,color)
+                    stdscr.addstr(row,2,f"{k} last:{time.ctime(v['last'])} next:{time.ctime(v['next'])}")
+                    row +=1
+                stdscr.refresh()
+                try:
+                    if stdscr.getch() == ord('q'):
+                        break
+                except:
+                    pass
+                time.sleep(1)
+        curses.wrapper(draw)
+
+    def do_exit(self,arg):
+        """exit - Exit CLI"""
         return True
 
 # -----------------------------
@@ -373,17 +435,14 @@ class ProxyCLI(Cmd):
 def main():
     proxy = ProxyServer()
     proxy.start()
-
     def signal_handler(sig, frame):
         print("\nStopping proxy...")
         proxy.stop()
         sys.exit(0)
     signal.signal(signal.SIGINT, signal_handler)
 
-    try:
-        ProxyCLI().cmdloop()
-    finally:
-        proxy.stop()
+    ProxyCLI().cmdloop()
+    proxy.stop()
 
 if __name__=="__main__":
     main()
