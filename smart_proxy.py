@@ -231,6 +231,7 @@ class ProxyServer(threading.Thread):
 
     def run(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # allow immediate reuse
         self.sock.bind((self.bind_ip, self.port))
         self.sock.listen(1024)
         logging.info(f"Smart Proxy running on {self.bind_ip}:{self.port}")
@@ -239,13 +240,24 @@ class ProxyServer(threading.Thread):
                 self.sock.settimeout(1.0)
                 client, _ = self.sock.accept()
                 threading.Thread(target=handle_client, args=(client,), daemon=True).start()
-            except socket.timeout: continue
-            except Exception as e: logging.exception(e)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:
+                    logging.exception(e)
 
     def stop(self):
         self.running = False
-        if self.sock: self.sock.close()
+        if self.sock:
+            try:
+                self.sock.close()
+                logging.info("Proxy socket closed")
+            except:
+                pass
 
+# -----------------------------
+# CLI
+# -----------------------------
 # -----------------------------
 # CLI
 # -----------------------------
@@ -253,20 +265,45 @@ class ProxyCLI(Cmd):
     intro = "Proxy CLI - type help or ?"
     prompt = "(proxy) "
 
+    # --- DNS cache commands ---
     def do_show_dns(self, arg):
+        "Show in-memory DNS cache: show_dns"
+        if not dns_cache:
+            print("DNS cache is empty")
+            return
         for domain, ips in dns_cache.items():
-            print(domain, ips)
-
-    def do_show_latency(self, arg):
-        for k,v in latency_cache.items():
-            print(k,v)
+            print(f"{domain}: {ips}")
 
     def do_purge_dns(self, domain):
+        "Purge DNS cache for a domain: purge_dns example.com"
         if domain in dns_cache:
             del dns_cache[domain]
             print(f"Purged DNS cache for {domain}")
+        else:
+            print(f"No cached entry for {domain}")
 
+    def do_resolve(self, domain):
+        "Force DNS resolution and cache result: resolve example.com"
+        ips = resolve_domain(domain)
+        print(f"{domain}: {ips}")
+
+    # --- Latency cache commands ---
+    def do_show_latency(self, arg):
+        "Show latency cache: show_latency"
+        if not latency_cache:
+            print("Latency cache is empty")
+            return
+        for k,v in latency_cache.items():
+            print(f"{k}: {v}")
+
+    def do_purge_latency(self, arg):
+        "Purge all latency cache: purge_latency"
+        latency_cache.clear()
+        print("Cleared latency cache")
+
+    # --- Proxy modes ---
     def do_set_mode(self, mode):
+        "Set selection mode (first_match / lowest_latency): set_mode lowest_latency"
         global current_mode
         if mode in MODES:
             current_mode = mode
@@ -274,7 +311,72 @@ class ProxyCLI(Cmd):
         else:
             print(f"Invalid mode. Available: {MODES}")
 
+    # --- DNS server management ---
+    def do_add_dns(self, ip):
+        "Add a DNS server to config: add_dns 8.8.8.8"
+        if ip and ip not in config["dns_servers"]:
+            config["dns_servers"].append(ip)
+            save_config(config)
+            print(f"Added DNS server {ip}")
+        else:
+            print(f"{ip} already exists or invalid")
+
+    def do_remove_dns(self, ip):
+        "Remove a DNS server from config: remove_dns 8.8.8.8"
+        if ip in config["dns_servers"]:
+            config["dns_servers"].remove(ip)
+            save_config(config)
+            print(f"Removed DNS server {ip}")
+        else:
+            print(f"{ip} not found in config")
+
+    def do_show_dns_servers(self, arg):
+        "Show DNS servers in config: show_dns_servers"
+        print(config.get("dns_servers", []))
+
+    # --- Upstream proxy management ---
+    def do_add_upstream(self, arg):
+        "Add upstream proxy: add_upstream 1.2.3.4 1080"
+        try:
+            host, port = arg.split()
+            port = int(port)
+            entry = {"host": host, "port": port}
+            if entry not in config["upstream_proxies"]:
+                config["upstream_proxies"].append(entry)
+                save_config(config)
+                print(f"Added upstream proxy {entry}")
+            else:
+                print("Upstream already exists")
+        except:
+            print("Usage: add_upstream host port")
+
+    def do_remove_upstream(self, arg):
+        "Remove upstream proxy: remove_upstream 1.2.3.4 1080"
+        try:
+            host, port = arg.split()
+            port = int(port)
+            entry = {"host": host, "port": port}
+            if entry in config["upstream_proxies"]:
+                config["upstream_proxies"].remove(entry)
+                save_config(config)
+                print(f"Removed upstream proxy {entry}")
+            else:
+                print("Upstream not found")
+        except:
+            print("Usage: remove_upstream host port")
+
+    def do_show_upstreams(self, arg):
+        "Show upstream proxies in config: show_upstreams"
+        for up in config.get("upstream_proxies", []):
+            print(up)
+
+    # --- General commands ---
+    def do_show_config(self, arg):
+        "Show entire JSON configuration: show_config"
+        print(json.dumps(config, indent=2))
+
     def do_exit(self, arg):
+        "Exit CLI"
         print("Exiting CLI.")
         return True
 
