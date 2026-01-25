@@ -45,7 +45,8 @@ config = load_config()
 # IN-MEMORY CACHE
 # -----------------------------
 dns_cache = {}
-latency_cache = {}  # {(host, port): (latency, iface, ip, upstream)}
+latency_cache = {}  # {(host, port): runway_info}
+runways = {}        # {(iface, proxy_host, proxy_port, dns_ip): latency}
 
 # -----------------------------
 # NETWORK HELPERS
@@ -75,21 +76,14 @@ def get_iface_ip(iface):
 # -----------------------------
 # DNS RESOLUTION
 # -----------------------------
-def resolve_domain(domain):
-    if domain in dns_cache:
-        return dns_cache[domain]
-    ips = set()
-    for dns_ip in config.get("dns_servers", []):
-        try:
-            r = dns.resolver.Resolver(configure=False)
-            r.nameservers = [dns_ip]
-            r.timeout = 1
-            r.lifetime = 1
-            for answer in r.resolve(domain, "A"):
-                ips.add(answer.address)
-        except: pass
-    dns_cache[domain] = list(ips)
-    return list(ips)
+def resolve_domain(domain, dns_ip):
+    try:
+        r = dns.resolver.Resolver(configure=False)
+        r.nameservers = [dns_ip]
+        r.timeout = 1
+        r.lifetime = 1
+        return [a.address for a in r.resolve(domain, "A")]
+    except: return []
 
 # -----------------------------
 # TCP / PROXY PROBES
@@ -97,22 +91,20 @@ def resolve_domain(domain):
 TCP_TIMEOUT = 1.5
 BUFFER_SIZE = 65536
 
-def tcp_probe(ip, port, iface, results):
+def tcp_probe(ip, port, iface):
     try:
         src_ip = get_iface_ip(iface)
-        if not src_ip: return
+        if not src_ip: return None
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(TCP_TIMEOUT)
         s.bind((src_ip, 0))
         start = time.time()
         s.connect((ip, port))
-        results.append((time.time()-start, iface, ip, None))
-    except: pass
-    finally:
-        try: s.close()
-        except: pass
+        s.close()
+        return time.time() - start
+    except: return None
 
-def proxy_probe(proxy_host, proxy_port, target_host, target_port, results):
+def proxy_probe(proxy_host, proxy_port, target_host, target_port):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(TCP_TIMEOUT)
@@ -120,46 +112,45 @@ def proxy_probe(proxy_host, proxy_port, target_host, target_port, results):
         s.connect((proxy_host, proxy_port))
         s.sendall(f"CONNECT {target_host}:{target_port} HTTP/1.1\r\nHost: {target_host}\r\n\r\n".encode())
         resp = s.recv(4096)
-        if b"200" in resp:
-            results.append((time.time()-start, None, target_host, (proxy_host, proxy_port)))
         s.close()
-    except: pass
+        if b"200" in resp:
+            return time.time() - start
+    except: return None
 
 # -----------------------------
-# PATH SELECTION
+# RUNWAY SELECTION
 # -----------------------------
 MODES = ["first_match", "lowest_latency"]
 current_mode = "lowest_latency"
 
-def select_fastest_path(host, port):
+def build_runways(host, port):
+    global runways
+    runways.clear()
+    ifaces = get_interfaces()
+    for dns_ip in config.get("dns_servers", []):
+        ips = resolve_domain(host, dns_ip)
+        for ip in ips:
+            for iface in ifaces:
+                latency = tcp_probe(ip, port, iface)
+                if latency is not None:
+                    key = (iface, None, None, dns_ip)
+                    runways[key] = latency
+            for up in config.get("upstream_proxies", []):
+                latency = proxy_probe(up["host"], up["port"], host, port)
+                if latency is not None:
+                    key = (None, up["host"], up["port"], dns_ip)
+                    runways[key] = latency
+
+def select_runway(host, port):
     cache_key = (host, port)
     if cache_key in latency_cache:
         return latency_cache[cache_key]
-
-    ips = resolve_domain(host)
-    if not ips:
-        logging.warning(f"No IPs resolved for {host}")
-        return None
-
-    ifaces = get_interfaces()
-    threads = []
-    results = []
-
-    for ip in ips:
-        for iface in ifaces:
-            t = threading.Thread(target=tcp_probe, args=(ip, port, iface, results))
-            t.start()
-            threads.append(t)
-
-    for up in config.get("upstream_proxies", []):
-        t = threading.Thread(target=proxy_probe, args=(up["host"], up["port"], host, port, results))
-        t.start()
-        threads.append(t)
-
-    for t in threads: t.join()
-
-    if not results: return None
-    best = results[0] if current_mode=="first_match" else min(results, key=lambda x:x[0])
+    build_runways(host, port)
+    if not runways: return None
+    if current_mode == "first_match":
+        best = next(iter(runways.items()))
+    else:
+        best = min(runways.items(), key=lambda x: x[1])
     latency_cache[cache_key] = best
     return best
 
@@ -190,14 +181,14 @@ def handle_client(client):
             return
         host, port = req.split()[1].split(":")
         port = int(port)
-        best = select_fastest_path(host, port)
-        if not best:
+        runway_entry = select_runway(host, port)
+        if not runway_entry:
             client.close()
             return
-        latency, iface, ip, upstream = best
-        if upstream:
+        (iface, up_host, up_port, dns_ip), latency = runway_entry
+        if up_host:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect(upstream)
+            s.connect((up_host, up_port))
             s.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
             resp = s.recv(4096)
             if b"200" not in resp:
@@ -209,12 +200,13 @@ def handle_client(client):
         else:
             src_ip = get_iface_ip(iface)
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            ip = resolve_domain(host, dns_ip)[0]
             upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            upstream.bind((src_ip,0))
+            upstream.bind((src_ip, 0))
             upstream.connect((ip, port))
             threading.Thread(target=relay, args=(client, upstream), daemon=True).start()
             threading.Thread(target=relay, args=(upstream, client), daemon=True).start()
-    except: 
+    except:
         try: client.close()
         except: pass
 
@@ -231,7 +223,7 @@ class ProxyServer(threading.Thread):
 
     def run(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # allow immediate reuse
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.bind_ip, self.port))
         self.sock.listen(1024)
         logging.info(f"Smart Proxy running on {self.bind_ip}:{self.port}")
@@ -252,12 +244,8 @@ class ProxyServer(threading.Thread):
             try:
                 self.sock.close()
                 logging.info("Proxy socket closed")
-            except:
-                pass
+            except: pass
 
-# -----------------------------
-# CLI
-# -----------------------------
 # -----------------------------
 # CLI
 # -----------------------------
@@ -265,78 +253,43 @@ class ProxyCLI(Cmd):
     intro = "Proxy CLI - type help or ?"
     prompt = "(proxy) "
 
-    # --- DNS cache commands ---
-    def do_show_dns(self, arg):
-        "Show in-memory DNS cache: show_dns"
-        if not dns_cache:
-            print("DNS cache is empty")
+    def do_show_runways(self, arg):
+        "Show all current runways and latencies"
+        if not runways:
+            print("No runways built yet")
             return
+        for k,v in runways.items():
+            print(f"{k}: {v:.3f}s")
+
+    def do_show_latency(self, arg):
+        for k,v in latency_cache.items():
+            print(f"{k}: {v}")
+
+    def do_show_dns(self, arg):
         for domain, ips in dns_cache.items():
             print(f"{domain}: {ips}")
 
     def do_purge_dns(self, domain):
-        "Purge DNS cache for a domain: purge_dns example.com"
         if domain in dns_cache:
             del dns_cache[domain]
             print(f"Purged DNS cache for {domain}")
-        else:
-            print(f"No cached entry for {domain}")
 
-    def do_resolve(self, domain):
-        "Force DNS resolution and cache result: resolve example.com"
-        ips = resolve_domain(domain)
-        print(f"{domain}: {ips}")
-
-    # --- Latency cache commands ---
-    def do_show_latency(self, arg):
-        "Show latency cache: show_latency"
-        if not latency_cache:
-            print("Latency cache is empty")
-            return
-        for k,v in latency_cache.items():
-            print(f"{k}: {v}")
-
-    def do_purge_latency(self, arg):
-        "Purge all latency cache: purge_latency"
-        latency_cache.clear()
-        print("Cleared latency cache")
-
-    # --- Proxy modes ---
-    def do_set_mode(self, mode):
-        "Set selection mode (first_match / lowest_latency): set_mode lowest_latency"
-        global current_mode
-        if mode in MODES:
-            current_mode = mode
-            print(f"Mode set to {mode}")
-        else:
-            print(f"Invalid mode. Available: {MODES}")
-
-    # --- DNS server management ---
     def do_add_dns(self, ip):
-        "Add a DNS server to config: add_dns 8.8.8.8"
         if ip and ip not in config["dns_servers"]:
             config["dns_servers"].append(ip)
             save_config(config)
             print(f"Added DNS server {ip}")
-        else:
-            print(f"{ip} already exists or invalid")
 
     def do_remove_dns(self, ip):
-        "Remove a DNS server from config: remove_dns 8.8.8.8"
         if ip in config["dns_servers"]:
             config["dns_servers"].remove(ip)
             save_config(config)
             print(f"Removed DNS server {ip}")
-        else:
-            print(f"{ip} not found in config")
 
     def do_show_dns_servers(self, arg):
-        "Show DNS servers in config: show_dns_servers"
         print(config.get("dns_servers", []))
 
-    # --- Upstream proxy management ---
     def do_add_upstream(self, arg):
-        "Add upstream proxy: add_upstream 1.2.3.4 1080"
         try:
             host, port = arg.split()
             port = int(port)
@@ -344,14 +297,11 @@ class ProxyCLI(Cmd):
             if entry not in config["upstream_proxies"]:
                 config["upstream_proxies"].append(entry)
                 save_config(config)
-                print(f"Added upstream proxy {entry}")
-            else:
-                print("Upstream already exists")
+                print(f"Added upstream {entry}")
         except:
             print("Usage: add_upstream host port")
 
     def do_remove_upstream(self, arg):
-        "Remove upstream proxy: remove_upstream 1.2.3.4 1080"
         try:
             host, port = arg.split()
             port = int(port)
@@ -359,25 +309,22 @@ class ProxyCLI(Cmd):
             if entry in config["upstream_proxies"]:
                 config["upstream_proxies"].remove(entry)
                 save_config(config)
-                print(f"Removed upstream proxy {entry}")
-            else:
-                print("Upstream not found")
+                print(f"Removed upstream {entry}")
         except:
             print("Usage: remove_upstream host port")
 
     def do_show_upstreams(self, arg):
-        "Show upstream proxies in config: show_upstreams"
         for up in config.get("upstream_proxies", []):
             print(up)
 
-    # --- General commands ---
-    def do_show_config(self, arg):
-        "Show entire JSON configuration: show_config"
-        print(json.dumps(config, indent=2))
+    def do_set_mode(self, mode):
+        global current_mode
+        if mode in MODES:
+            current_mode = mode
+            print(f"Mode set to {mode}")
 
     def do_exit(self, arg):
-        "Exit CLI"
-        print("Exiting CLI.")
+        print("Exiting CLI")
         return True
 
 # -----------------------------
@@ -387,14 +334,16 @@ def main():
     proxy = ProxyServer()
     proxy.start()
 
-    # Handle Ctrl+C globally
     def signal_handler(sig, frame):
         print("\nStopping proxy...")
         proxy.stop()
         sys.exit(0)
     signal.signal(signal.SIGINT, signal_handler)
 
-    ProxyCLI().cmdloop()
+    try:
+        ProxyCLI().cmdloop()
+    finally:
+        proxy.stop()
 
 if __name__=="__main__":
     main()
