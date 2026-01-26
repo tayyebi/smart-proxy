@@ -14,65 +14,27 @@
 #include "health.h"
 #include "network.h"
 #include "utils.h"
+#include "tui.h"
+#include "logger.h"
 
-// Defensive terminal handling
+// Defensive terminal handling with double Ctrl+C support
 static volatile sig_atomic_t g_running = 1;
+static volatile sig_atomic_t g_shutdown_requested = 0;
 
 void signal_handler(int signal) {
     // Defensive: safe signal handling
     if (signal == SIGINT || signal == SIGTERM) {
-        g_running = 0;
+        if (g_shutdown_requested == 0) {
+            g_shutdown_requested = 1; // First Ctrl+C: graceful shutdown
+        } else {
+            g_running = 0; // Second Ctrl+C: force kill
+            exit(1); // Force exit
+        }
     }
 }
 
-#include "cli.h"
-
-int main(int argc, char* argv[]) {
-    // Check if CLI mode (has command arguments)
-    if (argc > 1) {
-        std::vector<std::string> args;
-        for (int i = 1; i < argc; ++i) {
-            args.push_back(argv[i]);
-        }
-        
-        // Initialize networking for CLI
-        if (!network::init()) {
-            utils::safe_print("Error: Failed to initialize networking\n");
-            return 1;
-        }
-        
-        // Load configuration
-        Config config = Config::load("config.json");
-        
-        // Ensure log directory and file exist (for future logging)
-        if (!config.log_file.empty()) {
-            utils::ensure_log_file(config.log_file);
-        }
-        
-        // Initialize components for CLI
-        std::shared_ptr<DNSResolver> dns_resolver = std::make_shared<DNSResolver>(
-            config.dns_servers, config.dns_timeout);
-        
-        std::shared_ptr<RunwayManager> runway_manager = std::make_shared<RunwayManager>(
-            config.interfaces, config.upstream_proxies, config.dns_servers, dns_resolver);
-        
-        runway_manager->discover_runways();
-        
-        std::shared_ptr<TargetAccessibilityTracker> tracker = std::make_shared<TargetAccessibilityTracker>(
-            config.success_rate_window, config.success_rate_threshold);
-        
-        std::shared_ptr<RoutingEngine> routing_engine = std::make_shared<RoutingEngine>(
-            tracker, config.routing_mode);
-        
-        // Create and run CLI
-        ProxyCLI cli(runway_manager, routing_engine, tracker);
-        int result = cli.execute(args);
-        
-        network::cleanup();
-        return result;
-    }
-    
-    // Service mode (no arguments)
+int main(int /*argc*/, char* /*argv*/[]) {
+    // Always run as service with TUI
     // Defensive: Set up output buffering
     setvbuf(stdout, nullptr, _IOLBF, 0);
     setvbuf(stderr, nullptr, _IOLBF, 0);
@@ -89,6 +51,7 @@ int main(int argc, char* argv[]) {
     }
     
     // Set up signal handlers (defensive: handle SIGINT, SIGTERM)
+    // First Ctrl+C = graceful shutdown, Second Ctrl+C = force kill
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
@@ -97,7 +60,12 @@ int main(int argc, char* argv[]) {
     #include <windows.h>
     SetConsoleCtrlHandler([](DWORD dwCtrlType) -> BOOL {
         if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
-            g_running = 0;
+            if (g_shutdown_requested == 0) {
+                g_shutdown_requested = 1;
+            } else {
+                g_running = 0;
+                exit(1);
+            }
             return TRUE;
         }
         return FALSE;
@@ -115,6 +83,10 @@ int main(int argc, char* argv[]) {
         if (!utils::ensure_log_file(config.log_file)) {
             utils::safe_print("Warning: Could not create log file: " + config.log_file + "\n");
             utils::safe_print("Logging will continue to stdout/stderr\n");
+        } else {
+            // Initialize logger
+            Logger::instance().init(config.log_file);
+            Logger::instance().log(LogLevel::INFO, "Smart Proxy Service starting");
         }
     }
     
@@ -171,29 +143,35 @@ int main(int argc, char* argv[]) {
     // Start health monitor
     health_monitor->start();
     
+    Logger::instance().log(LogLevel::INFO, "Proxy server started on " + config.proxy_listen_host + ":" + std::to_string(config.proxy_listen_port));
+    
+    // Create and run TUI
+    TUI tui(runway_manager, routing_engine, tracker, proxy_server, config);
+    
+    // Run TUI in main thread (blocks)
     if (utils::is_terminal()) {
-        std::cout << "Smart Proxy Service started\n";
-        std::cout << "Press Ctrl+C to stop\n";
-        utils::safe_flush();
+        tui.run();
+    } else {
+        // Not a terminal, just wait for shutdown
+        while (g_running && proxy_server->is_running() && g_shutdown_requested == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
     
-    // Main loop - wait for shutdown signal
-    while (g_running && proxy_server->is_running()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    
-    // Shutdown
-    if (utils::is_terminal()) {
-        std::cout << "\nShutting down...\n";
-        utils::safe_flush();
-    }
-    
-    health_monitor->stop();
-    proxy_server->stop();
-    
-    if (utils::is_terminal()) {
-        std::cout << "Smart Proxy Service stopped\n";
-        utils::safe_flush();
+    // Shutdown requested
+    if (g_shutdown_requested) {
+        Logger::instance().log(LogLevel::INFO, "Graceful shutdown requested");
+        if (utils::is_terminal()) {
+            utils::safe_print("\nShutting down gracefully...\n");
+            utils::safe_flush();
+        }
+        
+        tui.stop();
+        health_monitor->stop();
+        proxy_server->stop();
+        
+        Logger::instance().log(LogLevel::INFO, "Smart Proxy Service stopped");
+        Logger::instance().close();
     }
     
     network::cleanup();

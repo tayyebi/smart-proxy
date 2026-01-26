@@ -1,8 +1,10 @@
 #include "proxy.h"
 #include "utils.h"
+#include "logger.h"
 #include <sstream>
 #include <algorithm>
 #include <ctime>
+#include <mutex>
 
 // RFC 7230 - HTTP/1.1 Message Syntax and Routing
 // RFC 7231 - HTTP/1.1 Semantics and Content
@@ -21,7 +23,11 @@ ProxyServer::ProxyServer(
     , dns_resolver_(dns_resolver)
     , validator_(validator)
     , listen_socket_(network::INVALID_SOCKET_VALUE)
-    , running_(false) {
+    , running_(false)
+    , active_connections_(0)
+    , total_connections_(0)
+    , total_bytes_sent_(0)
+    , total_bytes_received_(0) {
 }
 
 ProxyServer::~ProxyServer() {
@@ -306,9 +312,48 @@ std::vector<uint8_t> ProxyServer::build_http_response(const HTTPResponse& respon
     return result;
 }
 
+size_t ProxyServer::get_active_connections() const {
+    return active_connections_.load();
+}
+
+uint64_t ProxyServer::get_total_connections() const {
+    return total_connections_.load();
+}
+
+uint64_t ProxyServer::get_total_bytes_sent() const {
+    return total_bytes_sent_.load();
+}
+
+uint64_t ProxyServer::get_total_bytes_received() const {
+    return total_bytes_received_.load();
+}
+
 void ProxyServer::handle_connection(socket_t client_sock) {
+    std::string client_ip;
+    uint16_t client_port = 0;
+    network::get_peer_address(client_sock, client_ip, client_port);
+    
+    uint64_t conn_start_time = std::time(nullptr);
+    std::string conn_id = client_ip + ":" + std::to_string(client_port) + "-" + std::to_string(conn_start_time);
+    
+    active_connections_++;
+    total_connections_++;
+    
+    ConnectionLog conn_log;
+    conn_log.timestamp = conn_start_time;
+    conn_log.level = "INFO";
+    conn_log.event = "connect";
+    conn_log.client_ip = client_ip;
+    conn_log.client_port = client_port;
+    
     HTTPRequest request;
     if (!parse_http_request(client_sock, request)) {
+        conn_log.event = "error";
+        conn_log.error = "Failed to parse HTTP request";
+        conn_log.duration_ms = (std::time(nullptr) - conn_start_time) * 1000.0;
+        Logger::instance().log_connection(conn_log);
+        
+        active_connections_--;
         // Send error response
         HTTPResponse error_response;
         error_response.status_code = 400;
@@ -378,14 +423,25 @@ void ProxyServer::handle_connection(socket_t client_sock) {
     }
     
     if (target_host.empty()) {
+        conn_log.event = "error";
+        conn_log.error = "No target host specified";
+        conn_log.duration_ms = (std::time(nullptr) - conn_start_time) * 1000.0;
+        Logger::instance().log_connection(conn_log);
+        
         HTTPResponse error_response;
         error_response.status_code = 400;
         error_response.status_text = "Bad Request";
         error_response.headers["Content-Length"] = "0";
         std::vector<uint8_t> response_data = build_http_response(error_response);
         network::send_data(client_sock, response_data.data(), response_data.size());
+        active_connections_--;
         return;
     }
+    
+    conn_log.target_host = target_host;
+    conn_log.target_port = target_port;
+    conn_log.method = request.method;
+    conn_log.path = request.path;
     
     // Select runway
     auto all_runways = runway_manager_->get_all_runways();
@@ -397,14 +453,22 @@ void ProxyServer::handle_connection(socket_t client_sock) {
     }
     
     if (!runway) {
+        conn_log.event = "error";
+        conn_log.error = "No accessible runway found";
+        conn_log.duration_ms = (std::time(nullptr) - conn_start_time) * 1000.0;
+        Logger::instance().log_connection(conn_log);
+        
         HTTPResponse error_response;
         error_response.status_code = 502;
         error_response.status_text = "Bad Gateway";
         error_response.headers["Content-Length"] = "0";
         std::vector<uint8_t> response_data = build_http_response(error_response);
         network::send_data(client_sock, response_data.data(), response_data.size());
+        active_connections_--;
         return;
     }
+    
+    conn_log.runway_id = runway->id;
     
     // Make request through runway
     const size_t max_retries = 2;
@@ -430,7 +494,21 @@ void ProxyServer::handle_connection(socket_t client_sock) {
             http_response.headers["Content-Length"] = std::to_string(response_body.size());
             
             std::vector<uint8_t> response_data = build_http_response(http_response);
-            network::send_data(client_sock, response_data.data(), response_data.size());
+            size_t sent = network::send_data(client_sock, response_data.data(), response_data.size());
+            
+            uint64_t conn_end_time = std::time(nullptr);
+            double duration = (conn_end_time - conn_start_time) * 1000.0;
+            
+            conn_log.event = "disconnect";
+            conn_log.status_code = status;
+            conn_log.bytes_sent = sent;
+            conn_log.bytes_received = request.body.size();
+            conn_log.duration_ms = duration;
+            Logger::instance().log_connection(conn_log);
+            
+            total_bytes_sent_ += sent;
+            total_bytes_received_ += request.body.size();
+            active_connections_--;
             return;
         } else if (attempt < max_retries - 1) {
             // Try alternative runway
@@ -443,12 +521,22 @@ void ProxyServer::handle_connection(socket_t client_sock) {
     }
     
     // All attempts failed
+    uint64_t conn_end_time = std::time(nullptr);
+    double duration = (conn_end_time - conn_start_time) * 1000.0;
+    
+    conn_log.event = "error";
+    conn_log.error = "All runway attempts failed";
+    conn_log.status_code = 502;
+    conn_log.duration_ms = duration;
+    Logger::instance().log_connection(conn_log);
+    
     HTTPResponse error_response;
     error_response.status_code = 502;
     error_response.status_text = "Bad Gateway";
     error_response.headers["Content-Length"] = "0";
     std::vector<uint8_t> response_data = build_http_response(error_response);
     network::send_data(client_sock, response_data.data(), response_data.size());
+    active_connections_--;
 }
 
 std::tuple<bool, bool, uint16_t, std::map<std::string, std::string>, std::vector<uint8_t>>

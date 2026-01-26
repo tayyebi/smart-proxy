@@ -61,6 +61,12 @@ public:
     // Check if server is running
     bool is_running() const { return running_; }
     
+    // Get connection statistics (thread-safe)
+    size_t get_active_connections() const;
+    uint64_t get_total_connections() const;
+    uint64_t get_total_bytes_sent() const;
+    uint64_t get_total_bytes_received() const;
+    
 private:
     Config config_;
     std::shared_ptr<RunwayManager> runway_manager_;
@@ -72,6 +78,13 @@ private:
     socket_t listen_socket_;
     std::atomic<bool> running_;
     std::thread server_thread_;
+    
+    // Connection tracking
+    mutable std::mutex stats_mutex_;
+    std::atomic<size_t> active_connections_;
+    std::atomic<uint64_t> total_connections_;
+    std::atomic<uint64_t> total_bytes_sent_;
+    std::atomic<uint64_t> total_bytes_received_;
     
     // Server main loop
     void server_loop();

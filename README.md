@@ -80,7 +80,7 @@ Example `config.json`:
 
 ### Start the proxy service
 
-Run without arguments to start the proxy server:
+Run the binary to start the proxy server with live monitoring TUI:
 
 ```bash
 ./smartproxy
@@ -96,47 +96,50 @@ The service will:
 - Create runways (combinations of interfaces, proxies, and DNS servers)
 - Start listening on the configured host/port (default: 127.0.0.1:2123)
 - Begin health monitoring and routing optimization
+- Display a live Terminal User Interface (TUI) showing:
+  - System status (routing mode, uptime, connection counts)
+  - Runways status and accessibility
+  - Active targets and their accessibility
+  - Active connections with details (client, target, runway, method, bytes)
 
-### Use the CLI
+### Live Monitoring TUI
 
-The same binary provides a CLI interface when run with commands:
+The TUI provides real-time monitoring of the proxy system with a layout that follows the system topology:
 
-```bash
-# Show help
-./smartproxy
+- **Header**: Shows routing mode, uptime, active/total connections
+- **Runways Section**: Lists discovered runways with their status (Accessible/Partially Accessible/Inaccessible)
+- **Targets Section**: Shows active targets and their accessibility status
+- **Connections Section**: Displays active connections with client IP, target, runway used, HTTP method, and data transferred
+- **Footer**: Shows shutdown instructions
 
-# Show current status
-./smartproxy status
+The TUI updates automatically every 500ms to reflect current system state.
 
-# List all runways
-./smartproxy runways
+### Shutdown
 
-# Show target accessibility matrix
-./smartproxy targets
+- **First Ctrl+C**: Initiates graceful shutdown (closes connections, stops services cleanly)
+- **Second Ctrl+C**: Force kills the process immediately
 
-# Show performance statistics
-./smartproxy stats
+### Logging
 
-# Change routing mode
-./smartproxy mode latency
-./smartproxy mode first_accessible
-./smartproxy mode round_robin
+All connection details are logged to `logs/proxy.log` (configurable in `config.json`) in a structured, parsable format:
 
-# Test target accessibility
-./smartproxy test example.com
-./smartproxy test example.com runway_id
-
-# Reload configuration
-./smartproxy reload
-
-# JSON output
-./smartproxy --json status
-./smartproxy --json runways
-./smartproxy --json targets
-./smartproxy --json stats
+```
+2026-01-26 20:44:12 [CONN] {"event":"connect","client_ip":"127.0.0.1","client_port":54321,"target_host":"example.com","target_port":80,"runway_id":"eth0-direct-8.8.8.8","method":"GET","path":"/","duration_ms":125.50,"bytes_sent":1024,"bytes_received":2048}
 ```
 
-**Note**: The CLI commands work independently - you don't need the service running to use them. They initialize the components to read configuration and display information.
+Logs include:
+- Timestamp
+- Event type (connect, disconnect, error)
+- Client information (IP, port)
+- Target information (host, port)
+- Runway used
+- HTTP method and path
+- Status code
+- Bytes sent/received
+- Duration
+- Error messages (if any)
+
+Logs are formatted for easy parsing by log analysis tools.
 
 ### Configure your application
 

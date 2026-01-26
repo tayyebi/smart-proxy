@@ -87,6 +87,9 @@ std::string get_last_error();
 // Convert IP address string to sockaddr_in
 bool ip_to_sockaddr(const std::string& ip, uint16_t port, struct sockaddr_in& addr);
 
+// Get peer address from socket
+bool get_peer_address(socket_t sock, std::string& ip, uint16_t& port);
+
 } // namespace network
 
 #endif // NETWORK_H

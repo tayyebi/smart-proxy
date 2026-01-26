@@ -277,4 +277,28 @@ bool ip_to_sockaddr(const std::string& ip, uint16_t port, struct sockaddr_in& ad
     return inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) == 1;
 }
 
+bool get_peer_address(socket_t sock, std::string& ip, uint16_t& port) {
+    struct sockaddr_in peer_addr;
+    socklen_t addr_len = sizeof(peer_addr);
+    
+#ifdef _WIN32
+    int result = getpeername(sock, reinterpret_cast<struct sockaddr*>(&peer_addr), &addr_len);
+    if (result == SOCKET_ERROR) {
+        return false;
+    }
+#else
+    int result = getpeername(sock, reinterpret_cast<struct sockaddr*>(&peer_addr), &addr_len);
+    if (result != 0) {
+        return false;
+    }
+#endif
+    
+    char ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &peer_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
+    ip = ip_str;
+    port = ntohs(peer_addr.sin_port);
+    
+    return true;
+}
+
 } // namespace network

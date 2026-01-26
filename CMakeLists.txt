@@ -25,7 +25,8 @@ set(SOURCES
     proxy.cpp
     health.cpp
     utils.cpp
-    cli.cpp
+    logger.cpp
+    tui.cpp
     ${PLATFORM_SOURCES}
 )
 
