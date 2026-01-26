@@ -51,6 +51,7 @@ struct Config {
     size_t log_backup_count;
     std::string proxy_listen_host;
     uint16_t proxy_listen_port;
+    bool mouse_enabled; // Enable mouse support in TUI
     
     Config();
     static Config load(const std::string& path);

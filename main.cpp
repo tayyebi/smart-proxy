@@ -150,9 +150,10 @@ int main(int /*argc*/, char* /*argv*/[]) {
     // Create and run TUI
     TUI tui(runway_manager, routing_engine, tracker, proxy_server, config);
     
-    // Run TUI in main thread (blocks)
+    // Run TUI in main thread (blocks, but checks shutdown flag)
+    // Pass shutdown flag so TUI can exit gracefully
     if (utils::is_terminal()) {
-        tui.run();
+        tui.run(&g_shutdown_requested);
     } else {
         // Not a terminal, just wait for shutdown
         while (g_running && proxy_server->is_running() && g_shutdown_requested == 0) {
@@ -160,17 +161,30 @@ int main(int /*argc*/, char* /*argv*/[]) {
         }
     }
     
-    // Shutdown requested
+    // Shutdown requested - TUI has exited, now clean up
     if (g_shutdown_requested) {
         Logger::instance().log(LogLevel::INFO, "Graceful shutdown requested");
+        
+        // TUI already displayed shutdown message and stopped, now clean up services
+        tui.stop();
+        
+        // Stop services
         if (utils::is_terminal()) {
-            utils::safe_print("\nShutting down gracefully...\n");
+            utils::safe_print("Stopping health monitor...\n");
             utils::safe_flush();
         }
-        
-        tui.stop();
         health_monitor->stop();
+        
+        if (utils::is_terminal()) {
+            utils::safe_print("Stopping proxy server...\n");
+            utils::safe_flush();
+        }
         proxy_server->stop();
+        
+        if (utils::is_terminal()) {
+            utils::safe_print("Smart Proxy Service stopped.\n");
+            utils::safe_flush();
+        }
         
         Logger::instance().log(LogLevel::INFO, "Smart Proxy Service stopped");
         Logger::instance().close();

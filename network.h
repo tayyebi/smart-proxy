@@ -72,7 +72,7 @@ void close_socket(socket_t sock);
 ssize_t send_data(socket_t sock, const void* data, size_t len);
 
 // Receive data (returns bytes received, -1 on error, 0 on connection closed)
-ssize_t recv_data(socket_t sock, void* buffer, size_t len);
+ssize_t recv_data(socket_t sock, void* buffer, size_t len, int flags = 0);
 
 // Poll sockets for events (POSIX: poll(), Windows: WSAEventSelect equivalent)
 // Returns number of ready sockets, -1 on error

@@ -1,6 +1,7 @@
 #include "tui.h"
 #include "utils.h"
 #include "logger.h"
+#include "routing.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -10,6 +11,7 @@
 #include <thread>
 #include <chrono>
 #include <map>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -38,10 +40,15 @@ TUI::TUI(std::shared_ptr<RunwayManager> runway_manager,
     , start_time_(std::time(nullptr))
     , cached_rows_(0)
     , cached_cols_(0)
-    , current_section_(FocusSection::Runways)
+    , cached_runway_count_(0)
+    , cached_target_count_(0)
+    , last_stats_cache_time_(0)
+    , current_tab_(Tab::Runways)
     , selected_index_(0)
+    , scroll_offset_(0)
     , detail_view_(false)
-    , detail_item_id_("") {
+    , detail_item_id_("")
+    , quit_confirmed_(false) {
 }
 
 TUI::~TUI() {
@@ -62,10 +69,13 @@ void TUI::setup_terminal() {
     dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
     SetConsoleMode(hOut, dwMode);
     
-    // Set input mode for non-blocking reads
+    // Set input mode for non-blocking reads and mouse input (only if enabled in config)
     DWORD inMode = 0;
     GetConsoleMode(hIn, &inMode);
     inMode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
+    if (config_.mouse_enabled) {
+        inMode |= ENABLE_MOUSE_INPUT; // Enable mouse input on Windows
+    }
     SetConsoleMode(hIn, inMode);
 #else
     // POSIX: Save terminal state and set raw mode
@@ -83,12 +93,20 @@ void TUI::setup_terminal() {
     
     clear_screen();
     hide_cursor();
+    
+    // Enable mouse tracking only if enabled in config
+    if (config_.mouse_enabled) {
+        enable_mouse_tracking();
+    }
 }
 
 void TUI::restore_terminal() {
     if (!utils::is_terminal()) {
         return;
     }
+    
+    // Disable mouse tracking first
+    disable_mouse_tracking();
     
 #ifdef _WIN32
     // Windows: Reset console mode
@@ -103,6 +121,7 @@ void TUI::restore_terminal() {
     DWORD inMode = 0;
     GetConsoleMode(hIn, &inMode);
     inMode |= (ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
+    inMode &= ~ENABLE_MOUSE_INPUT;
     SetConsoleMode(hIn, inMode);
 #else
     // POSIX: Restore terminal state
@@ -205,10 +224,15 @@ int TUI::get_terminal_cols() {
 #endif
 }
 
-void TUI::run() {
+void TUI::run(volatile sig_atomic_t* shutdown_flag) {
     if (!utils::is_terminal()) {
         // Not a terminal, just wait
         while (running_) {
+            if (shutdown_flag && *shutdown_flag) {
+                utils::safe_print("\nShutting down gracefully...\n");
+                utils::safe_flush();
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         return;
@@ -227,6 +251,25 @@ void TUI::run() {
     const auto update_interval = std::chrono::milliseconds(100);
     
     while (running_ && proxy_server_->is_running()) {
+        // Check shutdown flag (for graceful shutdown)
+        if (shutdown_flag && *shutdown_flag) {
+            // Display shutdown message before exiting
+            restore_terminal();
+            utils::safe_print("\n\nShutting down gracefully...\n");
+            utils::safe_print("Stopping services...\n");
+            utils::safe_flush();
+            break; // Exit loop for graceful shutdown
+        }
+        
+        // Check quit confirmation
+        if (quit_confirmed_) {
+            restore_terminal();
+            utils::safe_print("\n\nQuitting...\n");
+            utils::safe_flush();
+            running_ = false;
+            break;
+        }
+        
         auto now = std::chrono::steady_clock::now();
         
         // Check for keyboard input (non-blocking)
@@ -240,6 +283,21 @@ void TUI::run() {
         // Force update every interval to show live connection data (duration, bytes, etc.)
         bool force_update = (now - last_update) >= update_interval;
         if (should_redraw_ || terminal_resized_ || force_update) {
+            // Update stats cache periodically (every 2 seconds) to avoid blocking Stats tab
+            uint64_t now_secs = std::time(nullptr);
+            if (current_tab_ == Tab::Stats && (now_secs - last_stats_cache_time_) >= 2) {
+                // Update cache in background when Stats tab is active
+                try {
+                    auto runways = get_runways_snapshot();
+                    cached_runway_count_ = runways.size();
+                } catch (...) {}
+                try {
+                    auto targets = get_targets_snapshot();
+                    cached_target_count_ = targets.size();
+                } catch (...) {}
+                last_stats_cache_time_ = now_secs;
+            }
+            
             draw();
             should_redraw_ = false;
             terminal_resized_ = false;
@@ -250,7 +308,10 @@ void TUI::run() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     
-    restore_terminal();
+    // Only restore terminal if we didn't already do it for shutdown
+    if (!(shutdown_flag && *shutdown_flag)) {
+        restore_terminal();
+    }
 }
 
 void TUI::stop() {
@@ -274,9 +335,29 @@ void TUI::draw() {
     int rows = get_terminal_rows();
     int cols = get_terminal_cols();
     
-    if (rows < 10 || cols < 40) {
+    // Add margins: 1 row top/bottom, 2 cols left/right
+    const int margin_top = 1;
+    const int margin_bottom = 1;
+    const int margin_left = 2;
+    const int margin_right = 2;
+    const int min_rows = 15;
+    const int min_cols = 70;
+    
+    if (rows < min_rows || cols < min_cols) {
         std::cout << "\033[2J\033[1;1H"; // Clear and move to top
-        std::cout << "Terminal too small (min 40x10)\n";
+        std::cout << "Terminal too small (min " << min_cols << "x" << min_rows << ")\n";
+        std::cout << "Current: " << cols << "x" << rows << "\n";
+        std::cout.flush();
+        return;
+    }
+    
+    // Calculate available space with margins
+    int available_rows = rows - margin_top - margin_bottom;
+    int available_cols = cols - margin_left - margin_right;
+    
+    if (available_rows < 10 || available_cols < 60) {
+        std::cout << "\033[2J\033[1;1H";
+        std::cout << "Terminal too small after margins\n";
         std::cout.flush();
         return;
     }
@@ -285,22 +366,54 @@ void TUI::draw() {
     std::stringstream output;
     output << "\033[2J\033[1;1H"; // Clear screen and move to top
     
+    // Add top margin (blank lines)
+    for (int i = 0; i < margin_top; ++i) {
+        output << "\n";
+    }
+    
+    // Helper lambda to add left margin
+    auto add_left_margin = [&]() {
+        for (int i = 0; i < margin_left; ++i) {
+            output << " ";
+        }
+    };
+    
     // Draw detail view if active
     if (detail_view_) {
-        draw_detail_view_to_stream(output, cols, rows);
+        add_left_margin();
+        draw_detail_view(output, available_cols, available_rows);
     } else {
-        // Draw header
-        draw_header_to_stream(output, cols);
+        // Status bar
+        add_left_margin();
+        draw_status_bar(output, available_cols);
         
-        int header_height = 3;
-        int runways_height = std::min(8, (rows - header_height - 8) / 3);
-        int targets_height = std::min(6, (rows - header_height - runways_height - 6) / 2);
+        // Tab bar
+        add_left_margin();
+        draw_tab_bar(output, available_cols);
         
-        // Draw sections with selection highlighting
-        draw_runways_to_stream(output, cols, runways_height);
-        draw_targets_to_stream(output, cols, targets_height);
-        draw_connections_to_stream(output, cols, rows - header_height - runways_height - targets_height - 2);
-        draw_footer_to_stream(output, cols, rows);
+        // Content area (remaining space)
+        int status_h = 1;
+        int tab_h = 1;
+        int summary_h = 1;
+        int cmd_h = 1;
+        int content_h = available_rows - status_h - tab_h - summary_h - cmd_h;
+        
+        // Content
+        add_left_margin();
+        draw_content_area(output, available_cols, content_h);
+        
+        // Summary bar
+        add_left_margin();
+        draw_summary_bar(output, available_cols);
+        
+        // Command bar
+        add_left_margin();
+        draw_command_bar(output, available_cols);
+    }
+    
+    // Add bottom margin (blank lines)
+    for (int i = 0; i < margin_bottom; ++i) {
+        output << "\n";
     }
     
     // Single atomic output for maximum responsiveness
@@ -324,12 +437,14 @@ void TUI::draw_header() {
     std::cout << "Mode: ";
     
     std::string mode_str;
-    switch (config_.routing_mode) {
+    RoutingMode current_mode = routing_engine_->get_mode();
+    switch (current_mode) {
         case RoutingMode::Latency: mode_str = "Latency"; break;
         case RoutingMode::FirstAccessible: mode_str = "First Accessible"; break;
         case RoutingMode::RoundRobin: mode_str = "Round Robin"; break;
     }
-    std::cout << mode_str;
+    // Highlight mode as editable
+    std::cout << "\033[33;1m" << mode_str << "\033[0m"; // Yellow bold for editable
     
     std::cout << " | Uptime: " << format_uptime(start_time_);
     std::cout << " | Active: " << proxy_server_->get_active_connections();
@@ -337,7 +452,10 @@ void TUI::draw_header() {
     std::cout << " | Sent: " << utils::format_bytes(proxy_server_->get_total_bytes_sent());
     std::cout << " | Recv: " << utils::format_bytes(proxy_server_->get_total_bytes_received());
     
-    int remaining = cols - 120; // Increased for additional stats
+    // Show editable indicator for mode
+    std::cout << " | \033[33mCtrl+B: Mode\033[0m";
+    
+    int remaining = cols - 140; // Increased for additional stats and hint
     if (remaining > 0) {
         for (int i = 0; i < remaining; ++i) {
             std::cout << " ";
@@ -498,278 +616,693 @@ void TUI::draw_footer() {
     std::cout << "\033[0m";
 }
 
-void TUI::draw_header_to_stream(std::stringstream& output, int cols) {
-    // Title bar
+void TUI::draw_status_bar(std::stringstream& output, int cols) {
+    // Status bar: Left = title, Right = key metrics
     output << "\033[1;37;44m"; // Bold white on blue
     output << " Smart Proxy Monitor ";
-    for (int i = 22; i < cols; ++i) {
-        output << " ";
+    
+    // Right side: Status and key metrics
+    std::string status_text = "[Status: RUNNING]";
+    std::string metrics = "Uptime: " + format_uptime(start_time_) + 
+                         " | Active: " + std::to_string(proxy_server_->get_active_connections()) +
+                         " | Total: " + std::to_string(proxy_server_->get_total_connections());
+    
+    int used = 22 + status_text.length() + metrics.length();
+    int padding = cols - used;
+    if (padding > 0) {
+        for (int i = 0; i < padding; ++i) {
+            output << " ";
+        }
     }
-    output << "\033[0m\n";
-    
-    // Status line
-    output << "\033[1m"; // Bold
-    output << "Mode: ";
-    
-    std::string mode_str;
-    switch (config_.routing_mode) {
-        case RoutingMode::Latency: mode_str = "Latency"; break;
-        case RoutingMode::FirstAccessible: mode_str = "First Accessible"; break;
-        case RoutingMode::RoundRobin: mode_str = "Round Robin"; break;
-    }
-    output << mode_str;
-    
-    output << " | Uptime: " << format_uptime(start_time_);
-    output << " | Active: " << proxy_server_->get_active_connections();
-    output << " | Total: " << proxy_server_->get_total_connections();
-    output << " | Sent: " << utils::format_bytes(proxy_server_->get_total_bytes_sent());
-    output << " | Recv: " << utils::format_bytes(proxy_server_->get_total_bytes_received());
-    
-    int remaining = cols - 120; // Increased for additional stats
+    output << "\033[32m" << status_text << "\033[0m " << metrics;
+    output << "\033[0m";
+    // Fill to end of available width
+    int remaining = cols - used - status_text.length() - metrics.length() - 1;
     if (remaining > 0) {
         for (int i = 0; i < remaining; ++i) {
             output << " ";
         }
     }
-    output << "\033[0m\n";
+    output << "\n";
+}
+
+void TUI::draw_tab_bar(std::stringstream& output, int cols) {
+    // Tab bar with 5 tabs
+    std::vector<std::pair<std::string, Tab>> tabs = {
+        {"Runways", Tab::Runways},
+        {"Targets", Tab::Targets},
+        {"Connections", Tab::Connections},
+        {"Stats", Tab::Stats},
+        {"Help", Tab::Help}
+    };
     
-    // Separator
+    output << "\033[0m"; // Reset
+    
+    for (size_t i = 0; i < tabs.size(); ++i) {
+        bool is_active = (current_tab_ == tabs[i].second && !detail_view_);
+        
+        if (is_active) {
+            output << "\033[1;7m"; // Bold, reverse video for active
+        } else {
+            output << "\033[1;37;44m"; // Bold white on blue for inactive
+        }
+        
+        output << " " << tabs[i].first << " ";
+        output << "\033[0m";
+    }
+    
+    // Fill remaining space
+    int used = 35; // Approximate
+    for (int i = used; i < cols; ++i) {
+        output << " ";
+    }
+    output << "\n";
+    
+    // Separator line
+    output << "\033[90m"; // Dark gray
     for (int i = 0; i < cols; ++i) {
-        output << "-";
+        output << "─";
+    }
+    output << "\033[0m";
+    // Fill to end
+    for (int i = cols; i < cols; ++i) {
+        output << " ";
     }
     output << "\n";
 }
 
-void TUI::draw_runways_to_stream(std::stringstream& output, int cols, int max_rows) {
+void TUI::draw_content_area(std::stringstream& output, int cols, int max_rows) {
+    // Draw the active tab's content
+    switch (current_tab_) {
+        case Tab::Runways:
+            draw_runways_tab(output, cols, max_rows);
+            break;
+        case Tab::Targets:
+            draw_targets_tab(output, cols, max_rows);
+            break;
+        case Tab::Connections:
+            draw_connections_tab(output, cols, max_rows);
+            break;
+        case Tab::Stats:
+            draw_stats_tab(output, cols, max_rows);
+            break;
+        case Tab::Help:
+            draw_help_tab(output, cols, max_rows);
+            break;
+    }
+}
+
+// Table rendering helpers
+void TUI::draw_table_border(std::stringstream& output, const std::string& title, int cols) {
+    output << "┌─ " << title;
+    int used = 3 + title.length();
+    for (int i = used; i < cols - 1; ++i) {
+        output << "─";
+    }
+    output << "┐\n";
+}
+
+void TUI::draw_table_header(std::stringstream& output, const std::vector<std::pair<std::string, int>>& columns, int cols) {
+    output << "│";
+    for (const auto& col : columns) {
+        std::string header = col.first;
+        int width = col.second;
+        output << " " << header;
+        int padding = width - header.length() - 1;
+        for (int i = 0; i < padding; ++i) {
+            output << " ";
+        }
+        output << "│";
+    }
+    // Fill remaining space
+    int used = 1;
+    for (const auto& col : columns) {
+        used += col.second + 1;
+    }
+    if (used < cols - 1) {
+        for (int i = used; i < cols - 1; ++i) {
+            output << " ";
+        }
+    }
+    output << "\n";
+    
+    // Separator line
+    output << "├";
+    for (const auto& col : columns) {
+        for (int i = 0; i < col.second + 1; ++i) {
+            output << "─";
+        }
+        output << "┼";
+    }
+    // Fill to end
+    int used2 = 1;
+    for (const auto& col : columns) {
+        used2 += col.second + 1;
+    }
+    if (used2 < cols - 1) {
+        for (int i = used2; i < cols - 1; ++i) {
+            output << "─";
+        }
+    }
+    output << "┤\n";
+}
+
+void TUI::draw_table_row(std::stringstream& output, const std::vector<std::string>& cells, 
+                         const std::vector<int>& widths, bool is_selected, bool is_alternate) {
+    if (is_selected) {
+        output << "\033[7m"; // Reverse video
+    } else if (is_alternate) {
+        output << "\033[90m"; // Dark gray for alternate rows
+    }
+    
+    output << "│";
+    for (size_t i = 0; i < cells.size() && i < widths.size(); ++i) {
+        std::string cell = cells[i];
+        int width = widths[i];
+        
+        // Truncate if needed
+        if (cell.length() > static_cast<size_t>(width - 1)) {
+            cell = cell.substr(0, width - 4) + "...";
+        }
+        
+        output << " " << cell;
+        int padding = width - cell.length() - 1;
+        for (int j = 0; j < padding; ++j) {
+            output << " ";
+        }
+        output << "│";
+    }
+    
+    output << "\033[0m\n"; // Reset colors
+}
+
+void TUI::draw_runways_tab(std::stringstream& output, int cols, int max_rows) {
     auto runways = get_runways_snapshot();
     
-    // Section header with focus indicator
-    std::string header = "Runways (" + std::to_string(runways.size()) + ")";
-    if (current_section_ == FocusSection::Runways && !detail_view_) {
-        output << "\033[1;7m" << header << "\033[0m\n"; // Highlighted when focused
-    } else {
-        output << "\033[1m" << header << ":\033[0m\n";
+    // Adjust scroll to keep selected item visible
+    int visible_items = max_rows - 3; // Leave space for header and borders
+    if (visible_items < 1) visible_items = 1;
+    
+    if (selected_index_ < scroll_offset_) {
+        scroll_offset_ = selected_index_;
+    } else if (selected_index_ >= scroll_offset_ + visible_items) {
+        scroll_offset_ = selected_index_ - visible_items + 1;
     }
+    
+    // Table header
+    std::string title = "Runways (" + std::to_string(runways.size()) + ")";
+    draw_table_border(output, title, cols);
     
     if (runways.empty()) {
-        output << "  No runways discovered\n";
+        output << "│ No runways discovered yet                                    │\n";
+        output << "└";
+        for (int i = 0; i < cols - 2; ++i) output << "─";
+        output << "┘\n";
         return;
     }
     
-    // Show first N runways (limited by max_rows)
-    size_t max_show = std::min(runways.size(), static_cast<size_t>(max_rows - 1));
-    for (size_t i = 0; i < max_show; ++i) {
+    // Column definitions: Name, Width
+    std::vector<std::pair<std::string, int>> columns = {
+        {"ID", 25},
+        {"Status", 8},
+        {"Interface", 12},
+        {"Proxy", 20},
+        {"Latency", 10}
+    };
+    
+    draw_table_header(output, columns, cols);
+    
+    // Table rows
+    size_t start_idx = static_cast<size_t>(scroll_offset_);
+    size_t end_idx = std::min(start_idx + static_cast<size_t>(visible_items), runways.size());
+    
+    for (size_t i = start_idx; i < end_idx; ++i) {
         auto runway = runways[i];
+        int display_idx = static_cast<int>(i);
+        bool is_selected = (current_tab_ == Tab::Runways && 
+                           display_idx == selected_index_ && !detail_view_);
+        bool is_alternate = (i % 2 == 1);
         
-        // Highlight selected item
-        bool is_selected = (current_section_ == FocusSection::Runways && 
-                           static_cast<int>(i) == selected_index_ && !detail_view_);
-        if (is_selected) {
-            output << "\033[7m> "; // Reverse video for selection
-        } else {
-            output << "  ";
-        }
-        
-        output << truncate_string(runway->id, 30);
-        
-        std::string status = get_runway_status_string(runway, "");
-        if (status == "Accessible") {
-            output << " \033[32m[OK]\033[0m";
-        } else if (status == "Partially Accessible") {
-            output << " \033[33m[PARTIAL]\033[0m";
-        } else {
-            output << " \033[31m[FAIL]\033[0m";
-        }
-        
-        output << " " << runway->interface;
-        if (runway->upstream_proxy) {
-            output << " -> " << runway->upstream_proxy->config.host;
-        }
-        
-        int remaining = cols - 70;
-        if (remaining > 0) {
-            for (int j = 0; j < remaining; ++j) {
-                output << " ";
+        // Get status symbol - try to find a target to check status
+        std::string status_symbol = "?";
+        std::string status_color = "";
+        auto targets = tracker_->get_all_targets();
+        bool found_status = false;
+        for (const auto& target : targets) {
+            auto metrics = tracker_->get_metrics(target, runway->id);
+            if (metrics) {
+                if (metrics->state == RunwayState::Accessible) {
+                    status_symbol = "✓";
+                    status_color = "\033[32m";
+                    found_status = true;
+                    break;
+                } else if (metrics->state == RunwayState::PartiallyAccessible && !found_status) {
+                    status_symbol = "⚠";
+                    status_color = "\033[33m";
+                    found_status = true;
+                } else if (metrics->state == RunwayState::Inaccessible && !found_status) {
+                    status_symbol = "✗";
+                    status_color = "\033[31m";
+                }
             }
         }
-        if (is_selected) {
-            output << "\033[0m"; // Reset after selection
+        if (!found_status) {
+            // Default based on type
+            status_symbol = runway->is_direct ? "✓" : "⚠";
+            status_color = runway->is_direct ? "\033[32m" : "\033[33m";
         }
-        output << "\n";
+        
+        std::string proxy_str = runway->upstream_proxy ? 
+            truncate_string(runway->upstream_proxy->config.host, 18) : "-";
+        
+        std::vector<std::string> cells = {
+            truncate_string(runway->id, 23),
+            status_color + status_symbol + "\033[0m",
+            truncate_string(runway->interface, 10),
+            proxy_str,
+            "N/A" // Latency - can be calculated later
+        };
+        
+        std::vector<int> widths = {25, 8, 12, 20, 10};
+        draw_table_row(output, cells, widths, is_selected, is_alternate);
     }
     
-    if (runways.size() > max_show) {
-        output << "  ... and " << (runways.size() - max_show) << " more\n";
-    }
+    // Bottom border
+    output << "└";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "┘\n";
 }
 
-void TUI::draw_targets_to_stream(std::stringstream& output, int cols, int max_rows) {
+void TUI::draw_targets_tab(std::stringstream& output, int cols, int max_rows) {
     auto targets = get_targets_snapshot();
     
-    // Section header with focus indicator
-    std::string header = "Targets (" + std::to_string(targets.size()) + ")";
-    if (current_section_ == FocusSection::Targets && !detail_view_) {
-        output << "\033[1;7m" << header << "\033[0m\n"; // Highlighted when focused
-    } else {
-        output << "\033[1m" << header << ":\033[0m\n";
+    int visible_items = max_rows - 3;
+    if (visible_items < 1) visible_items = 1;
+    
+    if (selected_index_ < scroll_offset_) {
+        scroll_offset_ = selected_index_;
+    } else if (selected_index_ >= scroll_offset_ + visible_items) {
+        scroll_offset_ = selected_index_ - visible_items + 1;
     }
+    
+    std::string title = "Targets (" + std::to_string(targets.size()) + ")";
+    draw_table_border(output, title, cols);
     
     if (targets.empty()) {
-        output << "  No targets accessed yet\n";
+        output << "│ No targets accessed yet                                      │\n";
+        output << "└";
+        for (int i = 0; i < cols - 2; ++i) output << "─";
+        output << "┘\n";
         return;
     }
     
-    // Show first N targets (limited by max_rows)
-    size_t max_show = std::min(targets.size(), static_cast<size_t>(max_rows - 1));
-    for (size_t i = 0; i < max_show; ++i) {
+    std::vector<std::pair<std::string, int>> columns = {
+        {"Target", 30},
+        {"Status", 8},
+        {"Best Runway", 25},
+        {"Success", 10},
+        {"Latency", 10}
+    };
+    
+    draw_table_header(output, columns, cols);
+    
+    size_t start_idx = static_cast<size_t>(scroll_offset_);
+    size_t end_idx = std::min(start_idx + static_cast<size_t>(visible_items), targets.size());
+    
+    for (size_t i = start_idx; i < end_idx; ++i) {
         std::string target = targets[i];
+        int display_idx = static_cast<int>(i);
+        bool is_selected = (current_tab_ == Tab::Targets && 
+                           display_idx == selected_index_ && !detail_view_);
+        bool is_alternate = (i % 2 == 1);
         
-        // Highlight selected item
-        bool is_selected = (current_section_ == FocusSection::Targets && 
-                           static_cast<int>(i) == selected_index_ && !detail_view_);
-        if (is_selected) {
-            output << "\033[7m> "; // Reverse video for selection
-        } else {
-            output << "  ";
-        }
         auto metrics_map = tracker_->get_target_metrics(target);
         
-        output << "  " << truncate_string(target, 40);
+        // Find best runway
+        std::string best_runway = "-";
+        std::string status_symbol = "?";
+        std::string status_color = "";
+        int success_rate = 0;
+        double avg_latency = 0.0;
         
-        // Find best runway for this target
-        std::string best_status = "Unknown";
         for (const auto& pair : metrics_map) {
-            auto metrics = pair.second;
+            const auto& metrics = pair.second;
             if (metrics.state == RunwayState::Accessible) {
-                best_status = "Accessible";
+                best_runway = truncate_string(pair.first, 23);
+                status_symbol = "✓";
+                status_color = "\033[32m";
+                success_rate = static_cast<int>(metrics.success_rate * 100);
+                avg_latency = metrics.avg_response_time;
                 break;
-            } else if (metrics.state == RunwayState::PartiallyAccessible && best_status != "Accessible") {
-                best_status = "Partial";
+            } else if (metrics.state == RunwayState::PartiallyAccessible && status_symbol != "✓") {
+                best_runway = truncate_string(pair.first, 23);
+                status_symbol = "⚠";
+                status_color = "\033[33m";
+                success_rate = static_cast<int>(metrics.success_rate * 100);
+                avg_latency = metrics.avg_response_time;
             }
         }
         
-        if (best_status == "Accessible") {
-            output << " \033[32m[OK]\033[0m";
-        } else if (best_status == "Partial") {
-            output << " \033[33m[PARTIAL]\033[0m";
-        } else {
-            output << " \033[31m[FAIL]\033[0m";
-        }
+        std::string latency_str = (avg_latency > 0.0) ? 
+            (std::to_string(static_cast<int>(avg_latency * 100) / 100.0) + "s") : "N/A";
         
-        int remaining = cols - 60;
-        if (remaining > 0) {
-            for (int j = 0; j < remaining; ++j) {
-                output << " ";
-            }
-        }
-        if (is_selected) {
-            output << "\033[0m"; // Reset after selection
-        }
-        output << "\n";
+        std::vector<std::string> cells = {
+            truncate_string(target, 28),
+            status_color + status_symbol + "\033[0m",
+            best_runway,
+            std::to_string(success_rate) + "%",
+            latency_str
+        };
+        
+        std::vector<int> widths = {30, 8, 25, 10, 10};
+        draw_table_row(output, cells, widths, is_selected, is_alternate);
     }
     
-    if (targets.size() > max_show) {
-        output << "  ... and " << (targets.size() - max_show) << " more\n";
-    }
+    output << "└";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "┘\n";
 }
 
-void TUI::draw_connections_to_stream(std::stringstream& output, int cols, int max_rows) {
+void TUI::draw_connections_tab(std::stringstream& output, int cols, int max_rows) {
     auto conns = get_connections_snapshot();
     
-    // Section header with focus indicator
-    std::string header = "Active Connections (" + std::to_string(conns.size()) + ")";
-    if (current_section_ == FocusSection::Connections && !detail_view_) {
-        output << "\033[1;7m" << header << "\033[0m\n"; // Highlighted when focused
-    } else {
-        output << "\033[1m" << header << ":\033[0m\n";
+    int visible_items = max_rows - 3;
+    if (visible_items < 1) visible_items = 1;
+    
+    if (selected_index_ < scroll_offset_) {
+        scroll_offset_ = selected_index_;
+    } else if (selected_index_ >= scroll_offset_ + visible_items) {
+        scroll_offset_ = selected_index_ - visible_items + 1;
     }
     
+    std::string title = "Active Connections (" + std::to_string(conns.size()) + ")";
+    draw_table_border(output, title, cols);
+    
     if (conns.empty()) {
-        output << "  No active connections\n";
+        output << "│ No active connections                                        │\n";
+        output << "└";
+        for (int i = 0; i < cols - 2; ++i) output << "─";
+        output << "┘\n";
         return;
     }
     
-    // Show first N connections (limited by max_rows)
-    size_t max_show = std::min(conns.size(), static_cast<size_t>(max_rows - 1));
-    for (size_t i = 0; i < max_show; ++i) {
+    std::vector<std::pair<std::string, int>> columns = {
+        {"Client", 18},
+        {"Target", 25},
+        {"Runway", 20},
+        {"Method", 8},
+        {"Data", 12},
+        {"Status", 8}
+    };
+    
+    draw_table_header(output, columns, cols);
+    
+    size_t start_idx = static_cast<size_t>(scroll_offset_);
+    size_t end_idx = std::min(start_idx + static_cast<size_t>(visible_items), conns.size());
+    
+    for (size_t i = start_idx; i < end_idx; ++i) {
         const auto& conn = conns[i];
+        int display_idx = static_cast<int>(i);
+        bool is_selected = (current_tab_ == Tab::Connections && 
+                           display_idx == selected_index_ && !detail_view_);
+        bool is_alternate = (i % 2 == 1);
         
-        // Highlight selected item
-        bool is_selected = (current_section_ == FocusSection::Connections && 
-                           static_cast<int>(i) == selected_index_ && !detail_view_);
-        if (is_selected) {
-            output << "\033[7m> "; // Reverse video for selection
-        } else {
-            output << "  ";
-        }
-        output << truncate_string(conn.client_ip + ":" + std::to_string(conn.client_port), 18);
-        output << " -> " << truncate_string(conn.target_host + ":" + std::to_string(conn.target_port), 22);
-        output << " [" << truncate_string(conn.runway_id, 12) << "]";
-        output << " " << truncate_string(conn.method, 6);
-        
-        // Show live duration
-        if (conn.start_time > 0) {
-            uint64_t now = std::time(nullptr);
-            uint64_t duration = now - conn.start_time;
-            output << " " << duration << "s";
-        }
-        
-        // Show live bytes
-        uint64_t total_bytes = conn.bytes_sent + conn.bytes_received;
-        if (total_bytes > 0) {
-            output << " " << format_bytes(total_bytes);
-        }
-        
-        // Show status indicator
+        // Status symbol
+        std::string status_symbol = "●";
+        std::string status_color = "";
         if (conn.status == "active") {
-            output << " \033[32m●\033[0m"; // Green dot for active
+            status_color = "\033[32m";
         } else if (conn.status == "connecting") {
-            output << " \033[33m●\033[0m"; // Yellow dot for connecting
+            status_color = "\033[33m";
         } else if (conn.status == "error") {
-            output << " \033[31m●\033[0m"; // Red dot for error
+            status_color = "\033[31m";
         }
         
-        int remaining = cols - 95;
-        if (remaining > 0) {
-            for (int j = 0; j < remaining; ++j) {
-                output << " ";
-            }
-        }
-        if (is_selected) {
-            output << "\033[0m"; // Reset after selection
-        }
-        output << "\n";
+        // Data
+        uint64_t total_bytes = conn.bytes_sent + conn.bytes_received;
+        std::string data_str = (total_bytes > 0) ? format_bytes(total_bytes) : "0 B";
+        
+        std::vector<std::string> cells = {
+            truncate_string(conn.client_ip + ":" + std::to_string(conn.client_port), 16),
+            truncate_string(conn.target_host + ":" + std::to_string(conn.target_port), 23),
+            truncate_string(conn.runway_id, 18),
+            truncate_string(conn.method, 6),
+            data_str,
+            status_color + status_symbol + "\033[0m"
+        };
+        
+        std::vector<int> widths = {18, 25, 20, 8, 12, 8};
+        draw_table_row(output, cells, widths, is_selected, is_alternate);
     }
     
-    if (conns.size() > max_show) {
-        output << "  ... and " << (conns.size() - max_show) << " more\n";
-    }
+    output << "└";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "┘\n";
 }
 
-void TUI::draw_footer_to_stream(std::stringstream& output, int cols, int /*row*/) {
-    output << "\033[" << get_terminal_rows() << ";1H"; // Move to last row
-    output << "\033[1;37;44m"; // Bold white on blue
-    if (detail_view_) {
-        output << " ESC: Back | Ctrl+C: Stop ";
-    } else {
-        output << " Tab: Switch | ↑↓: Navigate | Enter: Details | Ctrl+C: Stop ";
+// Old function removed - replaced by draw_command_bar
+// void TUI::draw_footer_to_stream(std::stringstream& output, int cols, int /*row*/) {
+
+// Old function - replaced by draw_detail_view in tui_new.cpp
+void TUI::draw_stats_tab(std::stringstream& output, int cols, int /*max_rows*/) {
+    // Use lightweight atomic counters and cached counts to avoid blocking
+    // Never call expensive operations that might lock or iterate large collections
+    
+    std::string title = "Statistics";
+    draw_table_border(output, title, cols);
+    
+    // Update cached counts only every 2 seconds to avoid blocking
+    uint64_t now = std::time(nullptr);
+    if (cached_runway_count_ == 0 || (now - last_stats_cache_time_) >= 2) {
+        // Update cache in background (but still blocking, so we do it infrequently)
+        try {
+            auto runways = get_runways_snapshot(); // Uses cache
+            cached_runway_count_ = runways.size();
+        } catch (...) {
+            // Keep old value on error
+        }
+        
+        try {
+            auto targets = get_targets_snapshot(); // Uses cache
+            cached_target_count_ = targets.size();
+        } catch (...) {
+            // Keep old value on error
+        }
+        
+        last_stats_cache_time_ = now;
     }
-    for (int i = (detail_view_ ? 30 : 60); i < cols; ++i) {
-        output << " ";
+    
+    // Use cached counts (instant, no blocking)
+    size_t runway_count = cached_runway_count_;
+    size_t target_count = cached_target_count_;
+    
+    // Use atomic counter directly (no lock needed, instant)
+    size_t conn_count = proxy_server_->get_active_connections();
+    
+    output << "│ \033[1mOverview\033[0m";
+    for (int i = 13; i < cols - 1; ++i) output << " ";
+    output << "│\n";
+    output << "├";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "┤\n";
+    
+    output << "│ Runways:        " << std::setw(10) << std::left << runway_count;
+    output << " Targets:        " << std::setw(10) << std::left << target_count;
+    for (int i = 50; i < cols - 1; ++i) output << " ";
+    output << "│\n";
+    
+    output << "│ Active Conn:    " << std::setw(10) << std::left << conn_count;
+    output << " Total Conn:     " << std::setw(10) << std::left << proxy_server_->get_total_connections();
+    for (int i = 50; i < cols - 1; ++i) output << " ";
+    output << "│\n";
+    
+    // Use atomic counters (no blocking)
+    output << "│ Bytes Sent:    " << std::setw(10) << std::left << utils::format_bytes(proxy_server_->get_total_bytes_sent());
+    output << " Bytes Recv:     " << std::setw(10) << std::left << utils::format_bytes(proxy_server_->get_total_bytes_received());
+    for (int i = 50; i < cols - 1; ++i) output << " ";
+    output << "│\n";
+    
+    // Performance section
+    output << "│";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "│\n";
+    output << "│ \033[1mPerformance\033[0m";
+    for (int i = 15; i < cols - 1; ++i) output << " ";
+    output << "│\n";
+    output << "├";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "┤\n";
+    
+    // Calculate throughput (atomic operations only)
+    uint64_t total_bytes = proxy_server_->get_total_bytes_sent() + proxy_server_->get_total_bytes_received();
+    uint64_t uptime_secs = std::time(nullptr) - start_time_;
+    double throughput = (uptime_secs > 0) ? (static_cast<double>(total_bytes) / uptime_secs) : 0.0;
+    
+    output << "│ Throughput:     " << std::setw(10) << std::left << utils::format_bytes(static_cast<uint64_t>(throughput)) + "/s";
+    output << " Uptime:         " << std::setw(10) << std::left << format_uptime(start_time_);
+    for (int i = 50; i < cols - 1; ++i) output << " ";
+    output << "│\n";
+    
+    // Routing mode (lightweight getter)
+    std::string mode_str;
+    try {
+        RoutingMode mode = routing_engine_->get_mode();
+        switch (mode) {
+            case RoutingMode::Latency: mode_str = "Latency"; break;
+            case RoutingMode::FirstAccessible: mode_str = "First Accessible"; break;
+            case RoutingMode::RoundRobin: mode_str = "Round Robin"; break;
+        }
+    } catch (...) {
+        mode_str = "Unknown";
     }
+    
+    output << "│ Routing Mode:   " << std::setw(10) << std::left << mode_str;
+    output << " Listen:         " << std::setw(10) << std::left << (config_.proxy_listen_host + ":" + std::to_string(config_.proxy_listen_port));
+    for (int i = 50; i < cols - 1; ++i) output << " ";
+    output << "│\n";
+    
+    output << "└";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "┘\n";
+}
+
+void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows) {
+    std::string title = "Help & Shortcuts";
+    draw_table_border(output, title, cols);
+    
+    output << "│ \033[1mKeyboard Shortcuts\033[0m";
+    for (int i = 20; i < cols - 1; ++i) output << " ";
+    output << "│\n";
+    output << "├";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "┤\n";
+    
+    std::vector<std::pair<std::string, std::string>> shortcuts = {
+        {"1-5", "Switch tabs"},
+        {"↑↓ / j/k", "Navigate items"},
+        {"←→ / h/l", "Switch tabs"},
+        {"Page Up/Down", "Scroll one page"},
+        {"Home/End", "Go to first/last item"},
+        {"Ctrl+Home/End", "Go to first/last tab"},
+        {"Space / Ctrl+F", "Page down"},
+        {"b", "Page up"},
+        {"Ctrl+D/U", "Half page down/up"},
+        {"g / gg", "Go to top (double-g)"},
+        {"G / Ctrl+G", "Go to bottom"},
+        {"Enter", "View details"},
+        {"Esc", "Back/Close details"},
+        {"Backspace/Delete", "Go up one item"},
+        {"Tab/Shift+Tab", "Switch tabs"},
+        {"q", "Quit (with confirmation)"},
+        {"Ctrl+B", "Cycle routing mode"},
+        {"F1", "Show help"},
+        {"F5", "Refresh display"},
+        {"?", "Show this help"}
+    };
+    
+    for (const auto& shortcut : shortcuts) {
+        output << "│ " << std::setw(12) << std::left << shortcut.first;
+        output << " " << shortcut.second;
+        int used = 15 + shortcut.first.length() + shortcut.second.length();
+        for (int i = used; i < cols - 1; ++i) output << " ";
+        output << "│\n";
+    }
+    
+    output << "│";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "│\n";
+    output << "│ \033[1mMouse Operations\033[0m";
+    for (int i = 18; i < cols - 1; ++i) output << " ";
+    output << "│\n";
+    output << "├";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "┤\n";
+    
+    std::vector<std::pair<std::string, std::string>> mouse_ops = {
+        {"Click Tab", "Switch to that tab"},
+        {"Click Item", "Select item"},
+        {"Double-click", "View details"},
+        {"Scroll", "Navigate list"},
+        {"Click Mode", "Cycle routing mode (in status bar)"}
+    };
+    
+    for (const auto& op : mouse_ops) {
+        output << "│ " << std::setw(15) << std::left << op.first;
+        output << " " << op.second;
+        int used = 18 + op.first.length() + op.second.length();
+        for (int i = used; i < cols - 1; ++i) output << " ";
+        output << "│\n";
+    }
+    
+    output << "└";
+    for (int i = 0; i < cols - 2; ++i) output << "─";
+    output << "┘\n";
+}
+
+void TUI::draw_summary_bar(std::stringstream& output, int cols) {
+    output << "\033[90m"; // Dark gray
+    for (int i = 0; i < cols; ++i) output << "─";
     output << "\033[0m";
+    // Fill to end
+    for (int i = cols; i < cols; ++i) output << " ";
+    output << "\n";
+    
+    auto runways = get_runways_snapshot();
+    auto targets = tracker_->get_all_targets();
+    auto conns = get_connections_snapshot();
+    
+    // Calculate throughput
+    uint64_t total_bytes = proxy_server_->get_total_bytes_sent() + proxy_server_->get_total_bytes_received();
+    uint64_t uptime_secs = std::time(nullptr) - start_time_;
+    double throughput = (uptime_secs > 0) ? (static_cast<double>(total_bytes) / uptime_secs) : 0.0;
+    
+    output << "\033[1mStats:\033[0m ";
+    output << runways.size() << " runways";
+    output << " | " << targets.size() << " targets";
+    output << " | " << conns.size() << " active";
+    output << " | " << utils::format_bytes(static_cast<uint64_t>(throughput)) << "/s";
+    
+    int used = 50; // Approximate
+    for (int i = used; i < cols; ++i) output << " ";
+    output << "\n";
 }
 
-void TUI::draw_detail_view_to_stream(std::stringstream& output, int cols, int rows) {
+void TUI::draw_command_bar(std::stringstream& output, int cols) {
+    output << "\033[90m"; // Dark gray
+    for (int i = 0; i < cols; ++i) output << "─";
+    output << "\033[0m";
+    // Fill to end
+    for (int i = cols; i < cols; ++i) output << " ";
+    output << "\n";
+    
+    output << "\033[1;37;44m"; // Bold white on blue
+    
+    if (detail_view_) {
+        output << " [Esc] Back  [q] Quit";
+    } else {
+        output << " [1-5] Tabs  [↑↓] Navigate  [Enter] Details  [q] Quit  [Ctrl+B] Mode  [?] Help";
+    }
+    
+    int used = (detail_view_) ? 25 : 70;
+    for (int i = used; i < cols; ++i) output << " ";
+    output << "\033[0m";
+    // Fill to end
+    for (int i = used; i < cols; ++i) output << " ";
+    output << "\n";
+}
+
+void TUI::draw_detail_view(std::stringstream& output, int cols, int rows) {
+    // Detail view with clean formatting
     output << "\033[1;37;44m"; // Bold white on blue
     output << " Detail View ";
-    for (int i = 13; i < cols; ++i) {
-        output << " ";
-    }
-    output << "\033[0m\n";
+    int used = 13;
+    for (int i = used; i < cols; ++i) output << " ";
+    output << "\033[0m";
+    // Fill to end
+    for (int i = used; i < cols; ++i) output << " ";
+    output << "\n";
     
-    // Determine what type of item we're viewing
-    if (current_section_ == FocusSection::Runways) {
+    if (current_tab_ == Tab::Runways) {
         auto runway = runway_manager_->get_runway(detail_item_id_);
         if (runway) {
             output << "\033[1mRunway ID:\033[0m " << runway->id << "\n\n";
@@ -833,54 +1366,47 @@ void TUI::draw_detail_view_to_stream(std::stringstream& output, int cols, int ro
                 }
             }
         }
-    } else if (current_section_ == FocusSection::Targets) {
-        output << "\033[1mTarget:\033[0m " << detail_item_id_ << "\n\n";
+    } else if (current_tab_ == Tab::Targets) {
+        output << "\n\033[1mTarget:\033[0m " << detail_item_id_ << "\n\n";
         auto metrics_map = tracker_->get_target_metrics(detail_item_id_);
         
         if (!metrics_map.empty()) {
-            output << "\033[1mRunway Metrics:\033[0m\n";
+            output << "\033[1mRunway Performance:\033[0m\n";
             for (const auto& pair : metrics_map) {
                 const auto& metrics = pair.second;
-                output << "  " << pair.first << ":\n";
-                output << "    State: ";
+                output << "  " << truncate_string(pair.first, 30) << ": ";
                 switch (metrics.state) {
                     case RunwayState::Accessible:
-                        output << "\033[32mAccessible\033[0m";
+                        output << "\033[32m✓\033[0m";
                         break;
                     case RunwayState::PartiallyAccessible:
-                        output << "\033[33mPartially Accessible\033[0m";
+                        output << "\033[33m⚠\033[0m";
                         break;
                     case RunwayState::Inaccessible:
-                        output << "\033[31mInaccessible\033[0m";
+                        output << "\033[31m✗\033[0m";
                         break;
                     default:
-                        output << "Unknown";
+                        output << "?";
                 }
-                output << "\n";
-                output << "    Success Rate: " << static_cast<int>(metrics.success_rate * 100) << "%\n";
-                output << "    Avg Response Time: " << std::fixed << std::setprecision(2) 
-                       << metrics.avg_response_time << "s\n";
-                output << "    Total Attempts: " << metrics.total_attempts << "\n";
-                output << "    Network Success: " << metrics.network_success_count << "\n";
-                output << "    User Success: " << metrics.user_success_count << "\n";
-                output << "    Failures: " << metrics.failure_count << "\n";
+                output << " " << static_cast<int>(metrics.success_rate * 100) << "% | "
+                       << std::fixed << std::setprecision(2) << metrics.avg_response_time << "s | "
+                       << metrics.total_attempts << " attempts\n";
             }
         }
-    } else if (current_section_ == FocusSection::Connections) {
+    } else if (current_tab_ == Tab::Connections) {
         std::lock_guard<std::mutex> lock(connections_mutex_);
         auto it = connections_.find(detail_item_id_);
         if (it != connections_.end()) {
             const auto& conn = it->second;
-            output << "\033[1mConnection ID:\033[0m " << conn.id << "\n\n";
-            output << "\033[1mDetails:\033[0m\n";
+            output << "\n\033[1mConnection Details:\033[0m\n";
+            output << "  ID: " << conn.id << "\n";
             output << "  Client: " << conn.client_ip << ":" << conn.client_port << "\n";
             output << "  Target: " << conn.target_host << ":" << conn.target_port << "\n";
             output << "  Runway: " << conn.runway_id << "\n";
-            output << "  Method: " << conn.method << "\n";
-            output << "  Path: " << conn.path << "\n";
+            output << "  Method: " << conn.method << " " << conn.path << "\n";
             output << "  Status: " << conn.status << "\n";
-            output << "  Bytes Sent: " << utils::format_bytes(conn.bytes_sent) << "\n";
-            output << "  Bytes Received: " << utils::format_bytes(conn.bytes_received) << "\n";
+            output << "  Data: " << utils::format_bytes(conn.bytes_sent) << " sent, "
+                   << utils::format_bytes(conn.bytes_received) << " received\n";
             if (conn.start_time > 0) {
                 uint64_t now = std::time(nullptr);
                 uint64_t duration = now - conn.start_time;
@@ -896,11 +1422,41 @@ void TUI::draw_detail_view_to_stream(std::stringstream& output, int cols, int ro
 }
 
 std::vector<std::shared_ptr<Runway>> TUI::get_runways_snapshot() {
-    return runway_manager_->get_all_runways();
+    // Cache runway count to avoid blocking
+    static std::vector<std::shared_ptr<Runway>> cached_runways;
+    static uint64_t last_cache_time = 0;
+    uint64_t now = std::time(nullptr);
+    
+    // Refresh cache every 2 seconds to avoid blocking
+    if (cached_runways.empty() || (now - last_cache_time) >= 2) {
+        try {
+            cached_runways = runway_manager_->get_all_runways();
+            last_cache_time = now;
+        } catch (...) {
+            // Return cached on error
+        }
+    }
+    
+    return cached_runways;
 }
 
 std::vector<std::string> TUI::get_targets_snapshot() {
-    return tracker_->get_all_targets();
+    // Cache targets to avoid blocking
+    static std::vector<std::string> cached_targets;
+    static uint64_t last_cache_time = 0;
+    uint64_t now = std::time(nullptr);
+    
+    // Refresh cache every 2 seconds to avoid blocking
+    if (cached_targets.empty() || (now - last_cache_time) >= 2) {
+        try {
+            cached_targets = tracker_->get_all_targets();
+            last_cache_time = now;
+        } catch (...) {
+            // Return cached on error
+        }
+    }
+    
+    return cached_targets;
 }
 
 std::vector<ConnectionInfo> TUI::get_connections_snapshot() {
@@ -990,5 +1546,117 @@ std::string TUI::get_runway_status_string(std::shared_ptr<Runway> runway, const 
         case RunwayState::Inaccessible: return "Inaccessible";
         case RunwayState::Testing: return "Testing";
         default: return "Unknown";
+    }
+}
+
+void TUI::enable_mouse_tracking() {
+    if (!utils::is_terminal()) {
+        return;
+    }
+    
+    // Enable X11 mouse reporting (works in most terminals)
+    // Format: \033[?1000h (X11) or \033[?1006h (SGR - better)
+    std::cout << "\033[?1006h"; // SGR mouse mode (more detailed)
+    std::cout << "\033[?1000h"; // X11 mouse reporting (fallback)
+    std::cout.flush();
+}
+
+void TUI::disable_mouse_tracking() {
+    if (!utils::is_terminal()) {
+        return;
+    }
+    
+    // Disable mouse tracking
+    std::cout << "\033[?1006l"; // Disable SGR mouse mode
+    std::cout << "\033[?1000l"; // Disable X11 mouse reporting
+    std::cout.flush();
+}
+
+void TUI::handle_mouse_click(int button, int x, int y) {
+    if (detail_view_) {
+        return;
+    }
+    
+    int rows = get_terminal_rows();
+    int status_h = 1;
+    int tab_bar_row = status_h + 1;
+    
+    // Check if click is on tab bar
+    if (y == tab_bar_row) {
+        // Tab positions (approximate)
+        if (x >= 1 && x <= 12) {
+            switch_tab(Tab::Runways);
+        } else if (x >= 13 && x <= 24) {
+            switch_tab(Tab::Targets);
+        } else if (x >= 25 && x <= 40) {
+            switch_tab(Tab::Connections);
+        } else if (x >= 41 && x <= 50) {
+            switch_tab(Tab::Stats);
+        } else if (x >= 51 && x <= 60) {
+            switch_tab(Tab::Help);
+        }
+        return;
+    }
+    
+    // Check if click is on status bar (mode area)
+    if (y == status_h && x >= 7 && x <= 25) {
+        cycle_routing_mode();
+        return;
+    }
+    
+    // Check if click is in content area
+    int content_start_row = status_h + 3; // After status, tab bar, and separator
+    if (y >= content_start_row && y < rows - 2) { // Leave room for summary and command bar
+        int content_row = y - content_start_row;
+        int item_index = scroll_offset_ + content_row;
+        int max_items = get_current_tab_size();
+        
+        if (item_index >= 0 && item_index < max_items) {
+            selected_index_ = item_index;
+            
+            if (button == 2 || button == 3) { // Middle or right button
+                show_detail();
+            } else if (button == 0) { // Left button
+                should_redraw_ = true;
+            }
+        }
+    }
+}
+
+void TUI::handle_mouse_scroll(int direction, int x, int y) {
+    if (detail_view_ || current_tab_ == Tab::Stats || current_tab_ == Tab::Help) {
+        return;
+    }
+    
+    int max_items = get_current_tab_size();
+    
+    if (direction < 0) { // Scroll up
+        if (scroll_offset_ > 0) {
+            scroll_offset_ = std::max(0, scroll_offset_ - 3);
+            if (selected_index_ > scroll_offset_ + 20) {
+                selected_index_ = scroll_offset_ + 10;
+            }
+            should_redraw_ = true;
+        }
+    } else { // Scroll down
+        int visible_items = 20;
+        if (scroll_offset_ + visible_items < max_items) {
+            scroll_offset_ = std::min(max_items - visible_items, scroll_offset_ + 3);
+            if (selected_index_ < scroll_offset_) {
+                selected_index_ = scroll_offset_;
+            }
+            should_redraw_ = true;
+        }
+    }
+}
+
+void TUI::show_quit_confirmation() {
+    if (!quit_confirmed_) {
+        quit_confirmed_ = true;
+        should_redraw_ = true;
+        // Will be handled in main loop
+    } else {
+        // Second time - actually quit
+        running_ = false;
     }
 }

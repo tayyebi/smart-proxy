@@ -5,6 +5,11 @@
 #include <algorithm>
 #include <ctime>
 #include <mutex>
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <sys/socket.h>
+#endif
 
 // RFC 7230 - HTTP/1.1 Message Syntax and Routing
 // RFC 7231 - HTTP/1.1 Semantics and Content
@@ -96,7 +101,9 @@ void ProxyServer::server_loop() {
         
         if (client_sock == network::INVALID_SOCKET_VALUE) {
             if (running_) {
-                // Error accepting connection
+                // Error accepting connection - check if it's because server is stopping
+                // Small delay to prevent busy loop
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             } else {
                 break; // Server stopped
@@ -376,6 +383,19 @@ void ProxyServer::handle_connection(socket_t client_sock) {
         active_connections_map_[conn_id]["bytes_received"] = "0";
     }
     
+    // Set socket timeouts to prevent hanging
+    struct timeval timeout;
+    timeout.tv_sec = static_cast<long>(config_.network_timeout);
+    timeout.tv_usec = 0;
+    
+#ifdef _WIN32
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+    setsockopt(client_sock, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+#else
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(client_sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+    
     ConnectionLog conn_log;
     conn_log.timestamp = conn_start_time;
     conn_log.level = "INFO";
@@ -383,6 +403,58 @@ void ProxyServer::handle_connection(socket_t client_sock) {
     conn_log.client_ip = client_ip;
     conn_log.client_port = client_port;
     
+    // Protocol detection: peek at first byte to detect SOCKS5 vs HTTP
+    // SOCKS5 starts with 0x05, HTTP starts with ASCII letters (GET, POST, CONNECT, etc.)
+    uint8_t first_byte = 0;
+#ifdef _WIN32
+    ssize_t peeked = recv(client_sock, reinterpret_cast<char*>(&first_byte), 1, MSG_PEEK);
+#else
+    ssize_t peeked = recv(client_sock, &first_byte, 1, MSG_PEEK);
+#endif
+    
+    if (peeked <= 0) {
+        // Connection closed or error
+        conn_log.event = "error";
+        conn_log.error = "Connection closed before protocol detection";
+        conn_log.duration_ms = (std::time(nullptr) - conn_start_time) * 1000.0;
+        Logger::instance().log_connection(conn_log);
+        
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            active_connections_map_.erase(conn_id);
+        }
+        active_connections_--;
+        return;
+    }
+    
+    // Check if it's SOCKS5 (starts with 0x05)
+    if (first_byte == 0x05) {
+        // SOCKS5 protocol - reject with proper error
+        conn_log.event = "error";
+        conn_log.error = "SOCKS5 protocol not supported (HTTP proxy only)";
+        conn_log.duration_ms = (std::time(nullptr) - conn_start_time) * 1000.0;
+        Logger::instance().log_connection(conn_log);
+        
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            active_connections_map_[conn_id]["status"] = "error";
+            active_connections_map_[conn_id]["error"] = "SOCKS5 not supported";
+        }
+        
+        // Send SOCKS5 error response (RFC 1928)
+        // Version (1 byte) + Method (1 byte) = 0x05 0xFF (no acceptable methods)
+        uint8_t socks5_reject[2] = {0x05, 0xFF};
+        network::send_data(client_sock, reinterpret_cast<const char*>(socks5_reject), 2);
+        
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            active_connections_map_.erase(conn_id);
+        }
+        active_connections_--;
+        return;
+    }
+    
+    // Assume HTTP - parse request
     HTTPRequest request;
     if (!parse_http_request(client_sock, request)) {
         conn_log.event = "error";

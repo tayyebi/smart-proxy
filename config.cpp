@@ -26,6 +26,7 @@ Config::Config()
     , log_backup_count(5)
     , proxy_listen_host("127.0.0.1")
     , proxy_listen_port(2123)
+    , mouse_enabled(false) // Disabled by default
 {
     interfaces.push_back("auto");
 }
@@ -333,6 +334,16 @@ Config Config::parse_json(const std::string& json_str) {
         if (host.length() >= 2 && host[0] == '"' && host[host.length()-1] == '"') {
             config.proxy_listen_host = host.substr(1, host.length() - 2);
         }
+    }
+    
+    // Parse mouse_enabled boolean
+    if (root.find("mouse_enabled") != root.end()) {
+        std::string val = utils::to_lower(utils::trim(root["mouse_enabled"]));
+        // Remove quotes if present
+        if (val.length() >= 2 && val[0] == '"' && val[val.length()-1] == '"') {
+            val = val.substr(1, val.length() - 2);
+        }
+        config.mouse_enabled = (val == "true" || val == "1");
     }
     
     // Parse arrays (simplified - would need full array parsing for nested objects)

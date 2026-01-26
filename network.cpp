@@ -166,9 +166,9 @@ ssize_t send_data(socket_t sock, const void* data, size_t len) {
 #endif
 }
 
-ssize_t recv_data(socket_t sock, void* buffer, size_t len) {
+ssize_t recv_data(socket_t sock, void* buffer, size_t len, int flags) {
 #ifdef _WIN32
-    int result = recv(sock, reinterpret_cast<char*>(buffer), static_cast<int>(len), 0);
+    int result = recv(sock, reinterpret_cast<char*>(buffer), static_cast<int>(len), flags);
     if (result == SOCKET_ERROR) {
         int error = WSAGetLastError();
         if (error == WSAEWOULDBLOCK) return 0; // Would block
@@ -178,7 +178,7 @@ ssize_t recv_data(socket_t sock, void* buffer, size_t len) {
     if (result == 0) return 0; // Connection closed
     return result;
 #else
-    ssize_t result = recv(sock, buffer, len, 0);
+    ssize_t result = recv(sock, buffer, len, flags);
     if (result < 0 && errno == EAGAIN) return 0; // Would block
     if (result == 0) return 0; // Connection closed
     return result;
