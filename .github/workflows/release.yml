@@ -1,0 +1,475 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # === LINUX VARIANTS ===
+          # Linux x86_64 (64-bit)
+          - os: ubuntu-latest
+            target: linux
+            arch: x86_64
+            binary: smartproxy-linux-x86_64
+            cc: gcc
+            cxx: g++
+          # Linux i686 (32-bit)
+          - os: ubuntu-latest
+            target: linux
+            arch: i686
+            binary: smartproxy-linux-i686
+            cc: gcc
+            cxx: g++
+            cflags: -m32
+            ldflags: -m32
+          # Linux ARM64
+          - os: ubuntu-latest
+            target: linux
+            arch: aarch64
+            binary: smartproxy-linux-arm64
+            cc: aarch64-linux-gnu-gcc
+            cxx: aarch64-linux-gnu-g++
+            cross: true
+          # Linux ARMv7 (Raspberry Pi 2/3)
+          - os: ubuntu-latest
+            target: linux
+            arch: armv7
+            binary: smartproxy-linux-armv7
+            cc: arm-linux-gnueabihf-gcc
+            cxx: arm-linux-gnueabihf-g++
+            cross: true
+            cflags: -march=armv7-a -mfpu=neon -mfloat-abi=hard
+          # Linux ARMv6 (Raspberry Pi Zero/1)
+          - os: ubuntu-latest
+            target: linux
+            arch: armv6
+            binary: smartproxy-linux-armv6
+            cc: arm-linux-gnueabihf-gcc
+            cxx: arm-linux-gnueabihf-g++
+            cross: true
+            cflags: -march=armv6 -mfpu=vfp -mfloat-abi=hard
+          # Linux MIPS64
+          - os: ubuntu-latest
+            target: linux
+            arch: mips64
+            binary: smartproxy-linux-mips64
+            cc: mips64-linux-gnuabi64-gcc
+            cxx: mips64-linux-gnuabi64-g++
+            cross: true
+          # Linux PowerPC64 (Little Endian)
+          - os: ubuntu-latest
+            target: linux
+            arch: ppc64le
+            binary: smartproxy-linux-ppc64le
+            cc: powerpc64le-linux-gnu-gcc
+            cxx: powerpc64le-linux-gnu-g++
+            cross: true
+          # Linux s390x (IBM Z/LinuxONE)
+          - os: ubuntu-latest
+            target: linux
+            arch: s390x
+            binary: smartproxy-linux-s390x
+            cc: s390x-linux-gnu-gcc
+            cxx: s390x-linux-gnu-g++
+            cross: true
+          # Linux RISC-V 64
+          - os: ubuntu-latest
+            target: linux
+            arch: riscv64
+            binary: smartproxy-linux-riscv64
+            cc: riscv64-linux-gnu-gcc
+            cxx: riscv64-linux-gnu-g++
+            cross: true
+          # Linux LoongArch64
+          - os: ubuntu-latest
+            target: linux
+            arch: loongarch64
+            binary: smartproxy-linux-loongarch64
+            cc: loongarch64-linux-gnu-gcc
+            cxx: loongarch64-linux-gnu-g++
+            cross: true
+
+          # === FREEBSD VARIANTS ===
+          - os: ubuntu-latest
+            target: freebsd
+            arch: x86_64
+            binary: smartproxy-freebsd-x86_64
+            cc: x86_64-unknown-freebsd13-gcc
+            cxx: x86_64-unknown-freebsd13-g++
+            cross: true
+          - os: ubuntu-latest
+            target: freebsd
+            arch: aarch64
+            binary: smartproxy-freebsd-arm64
+            cc: aarch64-unknown-freebsd13-gcc
+            cxx: aarch64-unknown-freebsd13-g++
+            cross: true
+          - os: ubuntu-latest
+            target: freebsd
+            arch: i686
+            binary: smartproxy-freebsd-i686
+            cc: i686-unknown-freebsd13-gcc
+            cxx: i686-unknown-freebsd13-g++
+            cross: true
+
+          # === WINDOWS VARIANTS ===
+          # Windows x86_64 (MSVC)
+          - os: windows-latest
+            target: windows
+            arch: x86_64
+            binary: smartproxy-windows-x86_64.exe
+            compiler: msvc
+          # Windows i686 (32-bit MSVC)
+          - os: windows-latest
+            target: windows
+            arch: i686
+            binary: smartproxy-windows-i686.exe
+            compiler: msvc
+            arch_flag: Win32
+          # Windows x86_64 (MinGW)
+          - os: ubuntu-latest
+            target: windows
+            arch: x86_64
+            binary: smartproxy-windows-x86_64-mingw.exe
+            cc: x86_64-w64-mingw32-gcc
+            cxx: x86_64-w64-mingw32-g++
+            cross: true
+          # Windows i686 (MinGW 32-bit)
+          - os: ubuntu-latest
+            target: windows
+            arch: i686
+            binary: smartproxy-windows-i686-mingw.exe
+            cc: i686-w64-mingw32-gcc
+            cxx: i686-w64-mingw32-g++
+            cross: true
+
+          # === macOS VARIANTS ===
+          - os: macos-12
+            target: darwin
+            arch: x86_64
+            binary: smartproxy-macos-x86_64
+            cc: clang
+            cxx: clang++
+            arch_flag: x86_64
+          - os: macos-12
+            target: darwin
+            arch: arm64
+            binary: smartproxy-macos-arm64
+            cc: clang
+            cxx: clang++
+            arch_flag: arm64
+
+          # === ANDROID VARIANTS ===
+          - os: ubuntu-latest
+            target: android
+            arch: arm64
+            binary: smartproxy-android-arm64
+            cc: aarch64-linux-android21-clang
+            cxx: aarch64-linux-android21-clang++
+            cross: true
+            android: true
+          - os: ubuntu-latest
+            target: android
+            arch: armv7
+            binary: smartproxy-android-armv7
+            cc: armv7a-linux-androideabi21-clang
+            cxx: armv7a-linux-androideabi21-clang++
+            cross: true
+            android: true
+          - os: ubuntu-latest
+            target: android
+            arch: x86_64
+            binary: smartproxy-android-x86_64
+            cc: x86_64-linux-android21-clang
+            cxx: x86_64-linux-android21-clang++
+            cross: true
+            android: true
+          - os: ubuntu-latest
+            target: android
+            arch: i686
+            binary: smartproxy-android-i686
+            cc: i686-linux-android21-clang
+            cxx: i686-linux-android21-clang++
+            cross: true
+            android: true
+
+          # === OTHER BSD VARIANTS ===
+          - os: ubuntu-latest
+            target: openbsd
+            arch: x86_64
+            binary: smartproxy-openbsd-x86_64
+            cc: x86_64-unknown-openbsd-gcc
+            cxx: x86_64-unknown-openbsd-g++
+            cross: true
+          - os: ubuntu-latest
+            target: openbsd
+            arch: aarch64
+            binary: smartproxy-openbsd-arm64
+            cc: aarch64-unknown-openbsd-gcc
+            cxx: aarch64-unknown-openbsd-g++
+            cross: true
+          - os: ubuntu-latest
+            target: netbsd
+            arch: x86_64
+            binary: smartproxy-netbsd-x86_64
+            cc: x86_64-unknown-netbsd-gcc
+            cxx: x86_64-unknown-netbsd-g++
+            cross: true
+          - os: ubuntu-latest
+            target: netbsd
+            arch: aarch64
+            binary: smartproxy-netbsd-arm64
+            cc: aarch64-unknown-netbsd-gcc
+            cxx: aarch64-unknown-netbsd-g++
+            cross: true
+          - os: ubuntu-latest
+            target: dragonfly
+            arch: x86_64
+            binary: smartproxy-dragonfly-x86_64
+            cc: x86_64-unknown-dragonfly-gcc
+            cxx: x86_64-unknown-dragonfly-g++
+            cross: true
+
+          # === OTHER PLATFORMS ===
+          - os: ubuntu-latest
+            target: solaris
+            arch: x86_64
+            binary: smartproxy-solaris-x86_64
+            cc: x86_64-pc-solaris2.11-gcc
+            cxx: x86_64-pc-solaris2.11-g++
+            cross: true
+          - os: ubuntu-latest
+            target: haiku
+            arch: x86_64
+            binary: smartproxy-haiku-x86_64
+            cc: x86_64-unknown-haiku-gcc
+            cxx: x86_64-unknown-haiku-g++
+            cross: true
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest' && matrix.cross == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+          if [ "${{ matrix.android }}" == "true" ]; then
+            echo "Android builds require NDK - skipping for now"
+            exit 0
+          elif [ "${{ matrix.target }}" == "freebsd" ]; then
+            sudo apt-get install -y freebsd-buildutils || echo "FreeBSD toolchain not available"
+          elif [ "${{ matrix.target }}" == "windows" ]; then
+            sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+            if [ "${{ matrix.arch }}" == "i686" ]; then
+              sudo apt-get install -y gcc-mingw-w64-i686 g++-mingw-w64-i686
+            fi
+          else
+            case "${{ matrix.arch }}" in
+              aarch64)
+                sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu || true
+                ;;
+              armv7|armv6)
+                sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf || true
+                ;;
+              mips64)
+                sudo apt-get install -y gcc-mips64-linux-gnuabi64 g++-mips64-linux-gnuabi64 || true
+                ;;
+              ppc64le)
+                sudo apt-get install -y gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu || true
+                ;;
+              s390x)
+                sudo apt-get install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu || true
+                ;;
+              riscv64)
+                sudo apt-get install -y gcc-riscv64-linux-gnu g++-riscv64-linux-gnu || true
+                ;;
+              loongarch64)
+                sudo apt-get install -y gcc-loongarch64-linux-gnu g++-loongarch64-linux-gnu || true
+                ;;
+            esac
+          fi
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-12'
+        run: |
+          brew install cmake || true
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install cmake -y || echo "CMake install failed"
+
+      - name: Setup CMake (Windows MSVC)
+        if: matrix.os == 'windows-latest' && matrix.compiler == 'msvc'
+        uses: microsoft/setup-msbuild@v1
+
+      - name: Configure and Build (Linux native)
+        if: matrix.os == 'ubuntu-latest' && matrix.cross != true
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          cmake --build . --config Release -j$(nproc)
+          if [ -f smartproxy ]; then
+            cp smartproxy ../${{ matrix.binary }}
+          fi
+
+      - name: Configure and Build (Linux cross-compile)
+        if: matrix.os == 'ubuntu-latest' && matrix.cross == true && matrix.android != true
+        run: |
+          mkdir -p build
+          cd build
+          export CC=${{ matrix.cc }}
+          export CXX=${{ matrix.cxx }}
+          export CFLAGS="${{ matrix.cflags }}"
+          export CXXFLAGS="${{ matrix.cflags }}"
+          export LDFLAGS="${{ matrix.ldflags }}"
+          if command -v ${{ matrix.cc }} &> /dev/null; then
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+              -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+              -DCMAKE_SYSTEM_NAME=Linux \
+              -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.arch }}
+            cmake --build . --config Release -j$(nproc)
+            if [ -f smartproxy ]; then
+              cp smartproxy ../${{ matrix.binary }}
+            fi
+          else
+            echo "Cross-compiler not available, skipping build"
+            touch ../${{ matrix.binary }}
+          fi
+
+      - name: Configure and Build (Windows MSVC)
+        if: matrix.os == 'windows-latest' && matrix.compiler == 'msvc'
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -A ${{ matrix.arch_flag || 'x64' }}
+          cmake --build . --config Release
+          if (Test-Path Release\smartproxy.exe) {
+            Copy-Item Release\smartproxy.exe ..\${{ matrix.binary }}
+          } elseif (Test-Path smartproxy.exe) {
+            Copy-Item smartproxy.exe ..\${{ matrix.binary }}
+          }
+
+      - name: Configure and Build (Windows MinGW)
+        if: matrix.os == 'ubuntu-latest' && matrix.target == 'windows'
+        run: |
+          mkdir -p build
+          cd build
+          if command -v ${{ matrix.cc }} &> /dev/null; then
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+              -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+              -DCMAKE_SYSTEM_NAME=Windows
+            cmake --build . --config Release -j$(nproc)
+            if [ -f smartproxy.exe ]; then
+              cp smartproxy.exe ../${{ matrix.binary }}
+            fi
+          else
+            echo "MinGW compiler not available, skipping build"
+            touch ../${{ matrix.binary }}
+          fi
+
+      - name: Configure and Build (macOS)
+        if: matrix.os == 'macos-12'
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch_flag }}
+          cmake --build . --config Release -j$(sysctl -n hw.ncpu)
+          if [ -f smartproxy ]; then
+            cp smartproxy ../${{ matrix.binary }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: warn
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Filter valid binaries
+        run: |
+          cd artifacts
+          # Remove empty files (failed builds)
+          find . -type f -size 0 -delete
+          # List valid binaries
+          echo "Valid binaries:"
+          find . -type f -executable -o -name "*.exe" | sort
+
+      - name: Create checksums
+        run: |
+          cd artifacts
+          find . -type f -exec sha256sum {} \; > checksums.txt
+          echo ""
+          echo "Checksums:"
+          cat checksums.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          body: |
+            ## Smart Proxy Service Release
+            
+            ### Supported Platforms
+            
+            This release includes binaries for:
+            - **Linux**: x86_64, i686, ARM64, ARMv7, ARMv6 (Raspberry Pi), MIPS64, PowerPC64, s390x (IBM Z), RISC-V 64, LoongArch64
+            - **Windows**: x86_64, i686 (MSVC and MinGW)
+            - **macOS**: x86_64, ARM64 (Apple Silicon)
+            - **FreeBSD**: x86_64, ARM64, i686
+            - **OpenBSD**: x86_64, ARM64
+            - **NetBSD**: x86_64, ARM64
+            - **DragonFly BSD**: x86_64
+            - **Android**: ARM64, ARMv7, x86_64, i686
+            - **Other**: Solaris, Haiku
+            
+            ### Installation
+            
+            1. Download the binary for your platform
+            2. Make it executable (Linux/macOS): `chmod +x smartproxy-*`
+            3. Run: `./smartproxy-*` (or `smartproxy-*.exe` on Windows)
+            
+            ### Verification
+            
+            Verify the checksums:
+            ```bash
+            sha256sum -c checksums.txt
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

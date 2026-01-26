@@ -1,0 +1,56 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+bin/
+lib/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Compiled binaries
+smartproxy
+smartproxy.exe
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
+
+# OS files
+Thumbs.db
+desktop.ini
+
+# Coverage
+*.gcov
+*.gcda
+*.gcno
+coverage/
+
+# Debug files
+*.dSYM/
+*.pdb
