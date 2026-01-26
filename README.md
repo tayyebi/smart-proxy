@@ -1,120 +1,174 @@
-# Smart Proxy
+# Smart Proxy Service
 
-A high-performance, multi-interface SOCKS5 proxy with optional upstream proxies, latency-based selection, and optional authentication. Supports **TCP and UDP**, automatic runway health checks, and a live CLI for monitoring.
+A smart proxy service that routes traffic through optimal runways (interface + optional upstream proxy + DNS server + resolved IP) based on target accessibility, response times, and configured routing modes.
 
----
+**Now written in Rust for high performance and reliability!**
 
 ## Features
 
-* SOCKS5 TCP and UDP proxy support
-* Optional username/password authentication
-* Automatic interface and upstream proxy detection
-* Periodic runway health checks with latency-based selection
-* Live CLI for logs, runway status, and latency metrics
-* Async-safe relay and probes
-* Graceful shutdown and signal handling
-
----
+- **Multi-Protocol Support**: HTTP/HTTPS/FTP/SOCKS4/SOCKS5
+- **Intelligent Routing**: Latency-based, first-accessible, or round-robin modes
+- **Learning System**: Tracks accessibility and performance per runway per target
+- **User-Level Success Validation**: Measures actual usability, not just network connectivity
+- **Automatic Health Checks**: Detects runway accessibility changes automatically
+- **Edge Case Handling**: Comprehensive handling of network failures, DNS issues, and more
 
 ## Requirements
 
-* **Python 3.11+**
-* Linux-based system (tested on Debian/Ubuntu)
-* Optional: systemd for journal logging
-* Network access to at least one upstream proxy or external host for testing
-
----
+- Rust 1.70+ (install from [rustup.rs](https://rustup.rs/))
+- Linux/Unix system with network interfaces
 
 ## Installation
 
-1. **Update package index and install dependencies**:
+### Build the binaries
 
 ```bash
-sudo apt update
-sudo apt install -y python3 python3-pip python3-venv python3-dev build-essential
+./build.sh
 ```
 
-2. **Install required Python modules**:
+This will build two binaries:
+- `target/release/service` - The main proxy service
+- `target/release/cli` - The CLI management tool
+
+### Manual build
 
 ```bash
-pip3 install --user systemd-python
+cargo build --release
 ```
 
-> `systemd-python` is optional. If not installed, logging will still work to console.
-
-3. **Clone or copy the Smart Proxy project**:
-
-```bash
-git clone <your-repo-url> smart-proxy
-cd smart-proxy
-```
-
-4. **Ensure `smart_proxy.py` and `proxy_config.json` are in the same directory**.
-
----
+The binaries will be in `target/release/`:
+- `service` - Main proxy service binary
+- `cli` - CLI management tool binary
 
 ## Configuration
 
-Edit `proxy_config.json` to customize:
+Edit `config.json` to configure:
+- DNS servers
+- Upstream proxies
+- Network interfaces
+- Routing mode
+- Timeouts and limits
 
+Example `config.json`:
 ```json
 {
-  "upstream_proxies": [
-    {"host": "127.0.0.1", "port": 10808}
+  "routing_mode": "latency",
+  "dns_servers": [
+    {"host": "8.8.8.8", "port": 53, "name": "Google DNS"},
+    {"host": "1.1.1.1", "port": 53, "name": "Cloudflare DNS"}
   ],
-  "probe_interval": 10,
-  "tcp_timeout": 1.5,
-  "selection_mode": "latency",
-  "auth": {
-    "enabled": true,
-    "users": {
-      "admin": "securepassword"
-    }
-  }
+  "upstream_proxies": [
+    {"type": "http", "host": "proxy.example.com", "port": 8080}
+  ],
+  "interfaces": ["auto"],
+  "proxy_listen_host": "127.0.0.1",
+  "proxy_listen_port": 2123
 }
 ```
 
-* **upstream_proxies**: List of upstream proxies to route traffic through.
-* **probe_interval**: Seconds between automatic runway health checks.
-* **tcp_timeout**: Timeout for TCP/proxy probes.
-* **selection_mode**: `"first_available"` or `"latency"` for runway selection.
-* **auth**: Enable SOCKS5 username/password authentication.
+## Usage
 
----
-
-## Running the Proxy
-
-Start the proxy:
+### Start the proxy service
 
 ```bash
-python3 smart_proxy.py
+./target/release/service
 ```
 
-The CLI will be available immediately:
+Or if you've added it to your PATH:
+```bash
+service
+```
 
-* `show_runways` – Display live status of all runways
-* `show_logs` – View recent logs
-* `show_latency` – Show measured latency for all targets
-* `exit` – Stop the proxy gracefully
+The service will:
+- Discover available network interfaces
+- Create runways (combinations of interfaces, proxies, and DNS servers)
+- Start listening on the configured host/port (default: 127.0.0.1:2123)
+- Begin health monitoring and routing optimization
 
----
+### Use the CLI for monitoring and management
 
-## Example SOCKS5 Client Configuration
+```bash
+./target/release/cli <command>
+```
 
-* **Host:** `127.0.0.1`
-* **Port:** `1080`
-* **Authentication:** Username/password from `proxy_config.json` (if enabled)
+Or:
+```bash
+cli <command>
+```
 
----
+## CLI Commands
 
-## Notes
+- `status` - Show current status
+- `runways` - List all runways with metrics
+- `targets` - Show target accessibility matrix
+- `mode <mode>` - Switch routing mode (latency/first_accessible/round_robin)
+- `test <target> [runway_id]` - Test target accessibility
+- `reload` - Reload configuration
+- `stats` - Show performance statistics
 
-* Ensure at least one interface or upstream proxy is reachable to see runways as `UP`.
-* For testing, you can use Google DNS `8.8.8.8:53` or any reachable proxy/server.
-* UDP support is minimal; only direct UDP forwarding via SOCKS5 UDP ASSOCIATE is implemented.
+### Examples
 
----
+```bash
+# Show status
+./target/release/cli status
+
+# List all runways
+./target/release/cli runways
+
+# Test a target
+./target/release/cli test example.com
+
+# Test specific runway
+./target/release/cli test example.com direct_eth0_8.8.8.8_0
+
+# Change routing mode
+./target/release/cli mode latency
+
+# JSON output
+./target/release/cli --json status
+```
+
+## Architecture
+
+The system learns from traffic patterns and automatically adapts to network conditions, handling:
+- Internal/private network targets
+- Intermittent accessibility
+- Target-specific runway requirements
+- Multiple accessible runways with different latencies
+- Network vs user-level success validation
+
+### Components
+
+- **DNS Resolver**: Resolves domain names using configured DNS servers with caching
+- **Runway Manager**: Discovers and manages network interfaces and runway combinations
+- **Routing Engine**: Selects optimal runway based on routing mode (latency/first/round-robin)
+- **Accessibility Tracker**: Tracks success rates and performance metrics per target-runway pair
+- **Proxy Server**: HTTP proxy server that routes requests through selected runways
+- **Health Monitor**: Background health checks to detect runway accessibility changes
+
+## Performance
+
+The Rust implementation provides:
+- **Low latency**: Efficient async runtime with Tokio
+- **High throughput**: Optimized for concurrent connections
+- **Memory safety**: Rust's ownership system prevents common bugs
+- **Small binary size**: Optimized release builds
+
+## Troubleshooting
+
+### Build issues
+
+If you encounter build errors:
+1. Ensure Rust is up to date: `rustup update`
+2. Clean and rebuild: `cargo clean && cargo build --release`
+
+### Runtime issues
+
+- Check logs for error messages
+- Verify `config.json` is valid JSON
+- Ensure network interfaces are available
+- Check firewall settings for the proxy port
 
 ## License
 
-MIT License – free to use, modify, and distribute.
+[Add your license here]
