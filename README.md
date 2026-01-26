@@ -80,13 +80,15 @@ Example `config.json`:
 
 ### Start the proxy service
 
+Run without arguments to start the proxy server:
+
 ```bash
-./build/smartproxy
+./smartproxy
 ```
 
 Or on Windows:
 ```batch
-build\Release\smartproxy.exe
+smartproxy.exe
 ```
 
 The service will:
@@ -94,6 +96,47 @@ The service will:
 - Create runways (combinations of interfaces, proxies, and DNS servers)
 - Start listening on the configured host/port (default: 127.0.0.1:2123)
 - Begin health monitoring and routing optimization
+
+### Use the CLI
+
+The same binary provides a CLI interface when run with commands:
+
+```bash
+# Show help
+./smartproxy
+
+# Show current status
+./smartproxy status
+
+# List all runways
+./smartproxy runways
+
+# Show target accessibility matrix
+./smartproxy targets
+
+# Show performance statistics
+./smartproxy stats
+
+# Change routing mode
+./smartproxy mode latency
+./smartproxy mode first_accessible
+./smartproxy mode round_robin
+
+# Test target accessibility
+./smartproxy test example.com
+./smartproxy test example.com runway_id
+
+# Reload configuration
+./smartproxy reload
+
+# JSON output
+./smartproxy --json status
+./smartproxy --json runways
+./smartproxy --json targets
+./smartproxy --json stats
+```
+
+**Note**: The CLI commands work independently - you don't need the service running to use them. They initialize the components to read configuration and display information.
 
 ### Configure your application
 

@@ -50,6 +50,12 @@ void safe_print(const std::string& message);
 // Flush output safely
 void safe_flush();
 
+// Create directory if it doesn't exist
+bool create_directory(const std::string& path);
+
+// Ensure log directory and file exist
+bool ensure_log_file(const std::string& log_file_path);
+
 } // namespace utils
 
 #endif // UTILS_H

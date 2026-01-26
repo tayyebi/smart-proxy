@@ -3,6 +3,17 @@
 #include <algorithm>
 #include <cstring>
 #include <iostream>
+#include <fstream>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#define mkdir(path, mode) _mkdir(path)
+#else
+#include <unistd.h>
+#endif
 
 #ifdef _WIN32
 #include <io.h>
@@ -161,6 +172,74 @@ void safe_flush() {
     if (is_terminal()) {
         std::cout.flush();
     }
+}
+
+bool create_directory(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+    
+    // Check if directory already exists
+    struct stat info;
+    if (stat(path.c_str(), &info) == 0) {
+        if (info.st_mode & S_IFDIR) {
+            return true; // Directory exists
+        }
+        return false; // Path exists but is not a directory
+    }
+    
+    // Create directory
+#ifdef _WIN32
+    if (mkdir(path.c_str()) == 0) {
+        return true;
+    }
+#else
+    if (mkdir(path.c_str(), 0755) == 0) {
+        return true;
+    }
+#endif
+    
+    // Try to create parent directories if needed
+    size_t pos = path.find_last_of("/\\");
+    if (pos != std::string::npos) {
+        std::string parent = path.substr(0, pos);
+        if (!parent.empty() && create_directory(parent)) {
+            // Retry creating the directory
+#ifdef _WIN32
+            return mkdir(path.c_str()) == 0;
+#else
+            return mkdir(path.c_str(), 0755) == 0;
+#endif
+        }
+    }
+    
+    return false;
+}
+
+bool ensure_log_file(const std::string& log_file_path) {
+    if (log_file_path.empty()) {
+        return false;
+    }
+    
+    // Extract directory from file path
+    size_t last_slash = log_file_path.find_last_of("/\\");
+    if (last_slash != std::string::npos) {
+        std::string log_dir = log_file_path.substr(0, last_slash);
+        if (!log_dir.empty()) {
+            if (!create_directory(log_dir)) {
+                return false; // Failed to create directory
+            }
+        }
+    }
+    
+    // Create or touch the log file
+    std::ofstream file(log_file_path, std::ios::app);
+    if (file.is_open()) {
+        file.close();
+        return true;
+    }
+    
+    return false;
 }
 
 } // namespace utils

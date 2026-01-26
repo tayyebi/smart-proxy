@@ -25,7 +25,54 @@ void signal_handler(int signal) {
     }
 }
 
-int main(int /*argc*/, char* /*argv*/[]) {
+#include "cli.h"
+
+int main(int argc, char* argv[]) {
+    // Check if CLI mode (has command arguments)
+    if (argc > 1) {
+        std::vector<std::string> args;
+        for (int i = 1; i < argc; ++i) {
+            args.push_back(argv[i]);
+        }
+        
+        // Initialize networking for CLI
+        if (!network::init()) {
+            utils::safe_print("Error: Failed to initialize networking\n");
+            return 1;
+        }
+        
+        // Load configuration
+        Config config = Config::load("config.json");
+        
+        // Ensure log directory and file exist (for future logging)
+        if (!config.log_file.empty()) {
+            utils::ensure_log_file(config.log_file);
+        }
+        
+        // Initialize components for CLI
+        std::shared_ptr<DNSResolver> dns_resolver = std::make_shared<DNSResolver>(
+            config.dns_servers, config.dns_timeout);
+        
+        std::shared_ptr<RunwayManager> runway_manager = std::make_shared<RunwayManager>(
+            config.interfaces, config.upstream_proxies, config.dns_servers, dns_resolver);
+        
+        runway_manager->discover_runways();
+        
+        std::shared_ptr<TargetAccessibilityTracker> tracker = std::make_shared<TargetAccessibilityTracker>(
+            config.success_rate_window, config.success_rate_threshold);
+        
+        std::shared_ptr<RoutingEngine> routing_engine = std::make_shared<RoutingEngine>(
+            tracker, config.routing_mode);
+        
+        // Create and run CLI
+        ProxyCLI cli(runway_manager, routing_engine, tracker);
+        int result = cli.execute(args);
+        
+        network::cleanup();
+        return result;
+    }
+    
+    // Service mode (no arguments)
     // Defensive: Set up output buffering
     setvbuf(stdout, nullptr, _IOLBF, 0);
     setvbuf(stderr, nullptr, _IOLBF, 0);
@@ -62,6 +109,14 @@ int main(int /*argc*/, char* /*argv*/[]) {
     
     // Load configuration
     Config config = Config::load("config.json");
+    
+    // Ensure log directory and file exist
+    if (!config.log_file.empty()) {
+        if (!utils::ensure_log_file(config.log_file)) {
+            utils::safe_print("Warning: Could not create log file: " + config.log_file + "\n");
+            utils::safe_print("Logging will continue to stdout/stderr\n");
+        }
+    }
     
     // Initialize DNS resolver
     std::shared_ptr<DNSResolver> dns_resolver = std::make_shared<DNSResolver>(
