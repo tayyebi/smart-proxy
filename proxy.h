@@ -67,6 +67,9 @@ public:
     uint64_t get_total_bytes_sent() const;
     uint64_t get_total_bytes_received() const;
     
+    // Get active connections list (for TUI)
+    std::vector<std::map<std::string, std::string>> get_active_connections_info() const;
+    
 private:
     Config config_;
     std::shared_ptr<RunwayManager> runway_manager_;
@@ -81,10 +84,14 @@ private:
     
     // Connection tracking
     mutable std::mutex stats_mutex_;
+    mutable std::mutex connections_mutex_;
     std::atomic<size_t> active_connections_;
     std::atomic<uint64_t> total_connections_;
     std::atomic<uint64_t> total_bytes_sent_;
     std::atomic<uint64_t> total_bytes_received_;
+    
+    // Active connections map: conn_id -> connection info
+    std::map<std::string, std::map<std::string, std::string>> active_connections_map_;
     
     // Server main loop
     void server_loop();

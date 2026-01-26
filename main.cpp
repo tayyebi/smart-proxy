@@ -73,6 +73,8 @@ int main(int /*argc*/, char* /*argv*/[]) {
 #else
     // POSIX: Ignore SIGPIPE (defensive: prevent crashes on broken pipes)
     signal(SIGPIPE, SIG_IGN);
+    // POSIX: Handle terminal resize (SIGWINCH) - TUI will detect it automatically
+    // We don't need a handler here since TUI polls for size changes
 #endif
     
     // Load configuration

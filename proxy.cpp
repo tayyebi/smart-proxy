@@ -328,6 +328,32 @@ uint64_t ProxyServer::get_total_bytes_received() const {
     return total_bytes_received_.load();
 }
 
+std::vector<std::map<std::string, std::string>> ProxyServer::get_active_connections_info() const {
+    std::lock_guard<std::mutex> lock(connections_mutex_);
+    std::vector<std::map<std::string, std::string>> result;
+    
+    uint64_t now = std::time(nullptr);
+    
+    for (const auto& pair : active_connections_map_) {
+        std::map<std::string, std::string> conn_info = pair.second;
+        conn_info["id"] = pair.first;
+        
+        // Calculate live duration
+        if (conn_info.find("start_time") != conn_info.end()) {
+            uint64_t start_time = 0;
+            utils::safe_str_to_uint64(conn_info["start_time"], start_time);
+            if (start_time > 0) {
+                uint64_t duration = now - start_time;
+                conn_info["duration"] = std::to_string(duration);
+            }
+        }
+        
+        result.push_back(conn_info);
+    }
+    
+    return result;
+}
+
 void ProxyServer::handle_connection(socket_t client_sock) {
     std::string client_ip;
     uint16_t client_port = 0;
@@ -338,6 +364,17 @@ void ProxyServer::handle_connection(socket_t client_sock) {
     
     active_connections_++;
     total_connections_++;
+    
+    // Add to active connections map for live tracking
+    {
+        std::lock_guard<std::mutex> lock(connections_mutex_);
+        active_connections_map_[conn_id]["client_ip"] = client_ip;
+        active_connections_map_[conn_id]["client_port"] = std::to_string(client_port);
+        active_connections_map_[conn_id]["start_time"] = std::to_string(conn_start_time);
+        active_connections_map_[conn_id]["status"] = "connecting";
+        active_connections_map_[conn_id]["bytes_sent"] = "0";
+        active_connections_map_[conn_id]["bytes_received"] = "0";
+    }
     
     ConnectionLog conn_log;
     conn_log.timestamp = conn_start_time;
@@ -353,6 +390,11 @@ void ProxyServer::handle_connection(socket_t client_sock) {
         conn_log.duration_ms = (std::time(nullptr) - conn_start_time) * 1000.0;
         Logger::instance().log_connection(conn_log);
         
+        // Remove from active connections
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            active_connections_map_.erase(conn_id);
+        }
         active_connections_--;
         // Send error response
         HTTPResponse error_response;
@@ -443,6 +485,19 @@ void ProxyServer::handle_connection(socket_t client_sock) {
     conn_log.method = request.method;
     conn_log.path = request.path;
     
+    // Update active connection info
+    {
+        std::lock_guard<std::mutex> lock(connections_mutex_);
+        auto it = active_connections_map_.find(conn_id);
+        if (it != active_connections_map_.end()) {
+            it->second["target_host"] = target_host;
+            it->second["target_port"] = std::to_string(target_port);
+            it->second["method"] = request.method;
+            it->second["path"] = request.path;
+            it->second["status"] = "active";
+        }
+    }
+    
     // Select runway
     auto all_runways = runway_manager_->get_all_runways();
     auto runway = routing_engine_->select_runway(target_host, all_runways);
@@ -469,6 +524,15 @@ void ProxyServer::handle_connection(socket_t client_sock) {
     }
     
     conn_log.runway_id = runway->id;
+    
+    // Update runway in active connection
+    {
+        std::lock_guard<std::mutex> lock(connections_mutex_);
+        auto it = active_connections_map_.find(conn_id);
+        if (it != active_connections_map_.end()) {
+            it->second["runway_id"] = runway->id;
+        }
+    }
     
     // Make request through runway
     const size_t max_retries = 2;
@@ -499,6 +563,18 @@ void ProxyServer::handle_connection(socket_t client_sock) {
             uint64_t conn_end_time = std::time(nullptr);
             double duration = (conn_end_time - conn_start_time) * 1000.0;
             
+            // Update final connection stats before removing
+            {
+                std::lock_guard<std::mutex> lock(connections_mutex_);
+                auto it = active_connections_map_.find(conn_id);
+                if (it != active_connections_map_.end()) {
+                    it->second["bytes_sent"] = std::to_string(sent);
+                    it->second["bytes_received"] = std::to_string(request.body.size());
+                    it->second["status"] = "completed";
+                    it->second["status_code"] = std::to_string(status);
+                }
+            }
+            
             conn_log.event = "disconnect";
             conn_log.status_code = status;
             conn_log.bytes_sent = sent;
@@ -508,6 +584,12 @@ void ProxyServer::handle_connection(socket_t client_sock) {
             
             total_bytes_sent_ += sent;
             total_bytes_received_ += request.body.size();
+            
+            // Remove from active connections
+            {
+                std::lock_guard<std::mutex> lock(connections_mutex_);
+                active_connections_map_.erase(conn_id);
+            }
             active_connections_--;
             return;
         } else if (attempt < max_retries - 1) {
@@ -524,6 +606,16 @@ void ProxyServer::handle_connection(socket_t client_sock) {
     uint64_t conn_end_time = std::time(nullptr);
     double duration = (conn_end_time - conn_start_time) * 1000.0;
     
+    // Update connection as failed
+    {
+        std::lock_guard<std::mutex> lock(connections_mutex_);
+        auto it = active_connections_map_.find(conn_id);
+        if (it != active_connections_map_.end()) {
+            it->second["status"] = "error";
+            it->second["error"] = "All runway attempts failed";
+        }
+    }
+    
     conn_log.event = "error";
     conn_log.error = "All runway attempts failed";
     conn_log.status_code = 502;
@@ -536,6 +628,12 @@ void ProxyServer::handle_connection(socket_t client_sock) {
     error_response.headers["Content-Length"] = "0";
     std::vector<uint8_t> response_data = build_http_response(error_response);
     network::send_data(client_sock, response_data.data(), response_data.size());
+    
+    // Remove from active connections
+    {
+        std::lock_guard<std::mutex> lock(connections_mutex_);
+        active_connections_map_.erase(conn_id);
+    }
     active_connections_--;
 }
 

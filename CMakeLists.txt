@@ -27,6 +27,7 @@ set(SOURCES
     utils.cpp
     logger.cpp
     tui.cpp
+    tui_input.cpp
     ${PLATFORM_SOURCES}
 )
 
