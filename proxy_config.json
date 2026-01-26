@@ -1,0 +1,15 @@
+{
+  "upstream_proxies": [
+    {
+      "host": "127.0.0.1",
+      "port": 10808
+    }
+  ],
+  "probe_interval": 10,
+  "tcp_timeout": 5.0,
+  "selection_mode": "latency",
+  "auth": {
+    "enabled": false,
+    "users": {}
+  }
+}
