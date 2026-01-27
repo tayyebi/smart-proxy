@@ -14,6 +14,11 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 typedef SOCKET socket_t;
+// MSVC doesn't define ssize_t, so we define it here
+#ifdef _MSC_VER
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
