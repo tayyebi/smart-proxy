@@ -612,7 +612,7 @@ std::string TUI::get_current_item_id() {
 
 void TUI::cycle_routing_mode() {
     RoutingMode current_mode = routing_engine_->get_mode();
-    RoutingMode next_mode;
+    RoutingMode next_mode = RoutingMode::Latency; // Initialize with default
     
     // Cycle through modes: Latency -> FirstAccessible -> RoundRobin -> Latency
     switch (current_mode) {
@@ -623,6 +623,9 @@ void TUI::cycle_routing_mode() {
             next_mode = RoutingMode::RoundRobin;
             break;
         case RoutingMode::RoundRobin:
+            next_mode = RoutingMode::Latency;
+            break;
+        default:
             next_mode = RoutingMode::Latency;
             break;
     }

@@ -1167,7 +1167,7 @@ void TUI::draw_stats_tab(std::stringstream& output, int cols, int /*max_rows*/) 
     output << "┘\n";
 }
 
-void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows) {
+void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows __attribute__((unused))) {
     std::string title = "Help & Shortcuts";
     draw_table_border(output, title, cols);
     
@@ -1646,7 +1646,7 @@ void TUI::handle_mouse_click(int button, int x, int y) {
     }
 }
 
-void TUI::handle_mouse_scroll(int direction, int x, int y) {
+void TUI::handle_mouse_scroll(int direction, int x __attribute__((unused)), int y __attribute__((unused))) {
     if (detail_view_ || current_tab_ == Tab::Stats || current_tab_ == Tab::Help) {
         return;
     }
