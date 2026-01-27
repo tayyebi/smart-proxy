@@ -33,6 +33,23 @@ void signal_handler(int signal) {
     }
 }
 
+#ifdef _WIN32
+// Windows console control handler
+#include <windows.h>
+BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
+    if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
+        if (g_shutdown_requested == 0) {
+            g_shutdown_requested = 1;
+        } else {
+            g_running = 0;
+            exit(1);
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
 int main(int /*argc*/, char* /*argv*/[]) {
     // Always run as service with TUI
     // Defensive: Set up output buffering
@@ -57,19 +74,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
     
 #ifdef _WIN32
     // Windows: Also handle console close
-    #include <windows.h>
-    SetConsoleCtrlHandler([](DWORD dwCtrlType) -> BOOL {
-        if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_CLOSE_EVENT) {
-            if (g_shutdown_requested == 0) {
-                g_shutdown_requested = 1;
-            } else {
-                g_running = 0;
-                exit(1);
-            }
-            return TRUE;
-        }
-        return FALSE;
-    }, TRUE);
+    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 #else
     // POSIX: Ignore SIGPIPE (defensive: prevent crashes on broken pipes)
     signal(SIGPIPE, SIG_IGN);

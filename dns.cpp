@@ -226,7 +226,7 @@ std::pair<std::string, double> DNSResolver::resolve(const std::string& domain) {
             continue;
         }
         
-        ssize_t sent = sendto(sock, query.data(), query.size(), 0,
+        ssize_t sent = sendto(sock, reinterpret_cast<const char*>(query.data()), static_cast<int>(query.size()), 0,
                               reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr));
         if (sent != static_cast<ssize_t>(query.size())) {
             network::close_socket(sock);
@@ -238,7 +238,7 @@ std::pair<std::string, double> DNSResolver::resolve(const std::string& domain) {
         struct sockaddr_in from_addr;
         socklen_t from_len = sizeof(from_addr);
         
-        ssize_t received = recvfrom(sock, response.data(), response.size(), 0,
+        ssize_t received = recvfrom(sock, reinterpret_cast<char*>(response.data()), static_cast<int>(response.size()), 0,
                                     reinterpret_cast<struct sockaddr*>(&from_addr), &from_len);
         
         network::close_socket(sock);
