@@ -358,13 +358,6 @@ void TUI::draw() {
         return;
     }
     
-    if (rows < 10 || cols < 60) {
-        std::cout << "\033[2J\033[1;1H";
-        std::cout << "Terminal too small\n";
-        std::cout.flush();
-        return;
-    }
-    
     // Build entire frame in stringstream for single atomic output
     std::stringstream output;
     output << "\033[2J\033[1;1H"; // Clear screen and move to top
