@@ -335,25 +335,18 @@ void TUI::draw() {
     int rows = get_terminal_rows();
     int cols = get_terminal_cols();
     
-    // Add margins: 1 row top/bottom, 2 cols left/right
-    const int margin_top = 1;
-    const int margin_bottom = 1;
-    const int margin_left = 2;
-    const int margin_right = 2;
-    const int min_rows = 15;
-    const int min_cols = 70;
-    
-    if (rows < min_rows || cols < min_cols) {
+    // Use centralized constants for consistent layout
+    if (rows < MIN_TERMINAL_ROWS || cols < MIN_TERMINAL_COLS) {
         std::cout << "\033[2J\033[1;1H"; // Clear and move to top
-        std::cout << "Terminal too small (min " << min_cols << "x" << min_rows << ")\n";
+        std::cout << "Terminal too small (min " << MIN_TERMINAL_COLS << "x" << MIN_TERMINAL_ROWS << ")\n";
         std::cout << "Current: " << cols << "x" << rows << "\n";
         std::cout.flush();
         return;
     }
     
     // Calculate available space with margins
-    int available_rows = rows - margin_top - margin_bottom;
-    int available_cols = cols - margin_left - margin_right;
+    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
+    int available_cols = cols - MARGIN_LEFT - MARGIN_RIGHT;
     
     if (available_rows < 10 || available_cols < 60) {
         std::cout << "\033[2J\033[1;1H";
@@ -367,13 +360,13 @@ void TUI::draw() {
     output << "\033[2J\033[1;1H"; // Clear screen and move to top
     
     // Add top margin (blank lines)
-    for (int i = 0; i < margin_top; ++i) {
+    for (int i = 0; i < MARGIN_TOP; ++i) {
         output << "\n";
     }
     
     // Helper lambda to add left margin
     auto add_left_margin = [&]() {
-        for (int i = 0; i < margin_left; ++i) {
+        for (int i = 0; i < MARGIN_LEFT; ++i) {
             output << " ";
         }
     };
@@ -391,12 +384,8 @@ void TUI::draw() {
         add_left_margin();
         draw_tab_bar(output, available_cols);
         
-        // Content area (remaining space)
-        int status_h = 1;
-        int tab_h = 1;
-        int summary_h = 1;
-        int cmd_h = 1;
-        int content_h = available_rows - status_h - tab_h - summary_h - cmd_h;
+        // Content area (remaining space) - use centralized constants
+        int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
         
         // Content
         add_left_margin();
@@ -412,7 +401,7 @@ void TUI::draw() {
     }
     
     // Add bottom margin (blank lines)
-    for (int i = 0; i < margin_bottom; ++i) {
+    for (int i = 0; i < MARGIN_BOTTOM; ++i) {
         output << "\n";
     }
     
@@ -618,8 +607,11 @@ void TUI::draw_footer() {
 
 void TUI::draw_status_bar(std::stringstream& output, int cols) {
     // Status bar: Left = title, Right = key metrics
-    output << "\033[1;37;44m"; // Bold white on blue
-    output << " Smart Proxy Monitor ";
+    const std::string bg_color = "\033[1;37;44m"; // Bold white on blue
+    
+    output << bg_color;
+    std::string title = " Smart Proxy Monitor ";
+    output << title;
     
     // Right side: Status and key metrics
     std::string status_text = "[Status: RUNNING]";
@@ -627,22 +619,28 @@ void TUI::draw_status_bar(std::stringstream& output, int cols) {
                          " | Active: " + std::to_string(proxy_server_->get_active_connections()) +
                          " | Total: " + std::to_string(proxy_server_->get_total_connections());
     
-    int used = 22 + status_text.length() + metrics.length();
-    int padding = cols - used;
-    if (padding > 0) {
+    // Calculate actual width used (excluding ANSI codes)
+    int title_len = title.length();
+    int status_len = status_text.length();
+    int metrics_len = metrics.length();
+    int space_for_status_metrics = 1; // Space between status and metrics
+    
+    int total_content = title_len + status_len + metrics_len + space_for_status_metrics;
+    
+    // Fill middle padding
+    if (total_content < cols) {
+        int padding = cols - total_content;
         for (int i = 0; i < padding; ++i) {
             output << " ";
         }
     }
-    output << "\033[32m" << status_text << "\033[0m " << metrics;
-    output << "\033[0m";
-    // Fill to end of available width
-    int remaining = cols - used - status_text.length() - metrics.length() - 1;
-    if (remaining > 0) {
-        for (int i = 0; i < remaining; ++i) {
-            output << " ";
-        }
-    }
+    
+    // Output status and metrics with background color maintained
+    output << "\033[1;32;44m" << status_text << bg_color << " " << metrics;
+    
+    // Fill any remaining space to end of line
+    fill_line_with_bg(output, total_content, cols, bg_color);
+    
     output << "\n";
 }
 
@@ -656,24 +654,29 @@ void TUI::draw_tab_bar(std::stringstream& output, int cols) {
         {"Help", Tab::Help}
     };
     
+    const std::string inactive_bg = "\033[1;37;44m"; // Bold white on blue
+    
     output << "\033[0m"; // Reset
     
+    int tab_width_used = 0;
     for (size_t i = 0; i < tabs.size(); ++i) {
         bool is_active = (current_tab_ == tabs[i].second && !detail_view_);
         
         if (is_active) {
             output << "\033[1;7m"; // Bold, reverse video for active
         } else {
-            output << "\033[1;37;44m"; // Bold white on blue for inactive
+            output << inactive_bg;
         }
         
-        output << " " << tabs[i].first << " ";
+        std::string tab_text = " " + tabs[i].first + " ";
+        output << tab_text;
+        tab_width_used += tab_text.length();
+        
         output << "\033[0m";
     }
     
-    // Fill remaining space
-    int used = 35; // Approximate
-    for (int i = used; i < cols; ++i) {
+    // Fill remaining space on tab bar line (no background for empty space)
+    for (int i = tab_width_used; i < cols; ++i) {
         output << " ";
     }
     output << "\n";
@@ -683,12 +686,7 @@ void TUI::draw_tab_bar(std::stringstream& output, int cols) {
     for (int i = 0; i < cols; ++i) {
         output << "─";
     }
-    output << "\033[0m";
-    // Fill to end
-    for (int i = cols; i < cols; ++i) {
-        output << " ";
-    }
-    output << "\n";
+    output << "\033[0m\n";
 }
 
 void TUI::draw_content_area(std::stringstream& output, int cols, int max_rows) {
@@ -1240,12 +1238,10 @@ void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows) {
 }
 
 void TUI::draw_summary_bar(std::stringstream& output, int cols) {
+    // Separator line
     output << "\033[90m"; // Dark gray
     for (int i = 0; i < cols; ++i) output << "─";
-    output << "\033[0m";
-    // Fill to end
-    for (int i = cols; i < cols; ++i) output << " ";
-    output << "\n";
+    output << "\033[0m\n";
     
     auto runways = get_runways_snapshot();
     auto targets = tracker_->get_all_targets();
@@ -1256,50 +1252,63 @@ void TUI::draw_summary_bar(std::stringstream& output, int cols) {
     uint64_t uptime_secs = std::time(nullptr) - start_time_;
     double throughput = (uptime_secs > 0) ? (static_cast<double>(total_bytes) / uptime_secs) : 0.0;
     
-    output << "\033[1mStats:\033[0m ";
-    output << runways.size() << " runways";
-    output << " | " << targets.size() << " targets";
-    output << " | " << conns.size() << " active";
-    output << " | " << utils::format_bytes(static_cast<uint64_t>(throughput)) << "/s";
+    // Build stats text
+    std::stringstream stats;
+    stats << "\033[1mStats:\033[0m ";
+    stats << runways.size() << " runways";
+    stats << " | " << targets.size() << " targets";
+    stats << " | " << conns.size() << " active";
+    stats << " | " << utils::format_bytes(static_cast<uint64_t>(throughput)) << "/s";
     
-    int used = 50; // Approximate
+    output << stats.str();
+    
+    // Calculate actual visible length (approximate, excluding ANSI codes)
+    std::string stats_plain = "Stats: " + std::to_string(runways.size()) + " runways | " + 
+                              std::to_string(targets.size()) + " targets | " + 
+                              std::to_string(conns.size()) + " active | " + 
+                              utils::format_bytes(static_cast<uint64_t>(throughput)) + "/s";
+    int used = stats_plain.length();
+    
+    // Fill remaining space
     for (int i = used; i < cols; ++i) output << " ";
     output << "\n";
 }
 
 void TUI::draw_command_bar(std::stringstream& output, int cols) {
+    // Separator line
     output << "\033[90m"; // Dark gray
     for (int i = 0; i < cols; ++i) output << "─";
-    output << "\033[0m";
-    // Fill to end
-    for (int i = cols; i < cols; ++i) output << " ";
-    output << "\n";
+    output << "\033[0m\n";
     
-    output << "\033[1;37;44m"; // Bold white on blue
+    const std::string bg_color = "\033[1;37;44m"; // Bold white on blue
+    output << bg_color;
     
+    std::string command_text;
     if (detail_view_) {
-        output << " [Esc] Back  [q] Quit";
+        command_text = " [Esc/q] Back  [Q] Quit";
     } else {
-        output << " [1-5] Tabs  [↑↓] Navigate  [Enter] Details  [q] Quit  [Ctrl+B] Mode  [?] Help";
+        command_text = " [1-5] Tabs  [↑↓] Navigate  [Enter] Details  [q] Quit  [Ctrl+B] Mode  [?] Help";
     }
     
-    int used = (detail_view_) ? 25 : 70;
-    for (int i = used; i < cols; ++i) output << " ";
-    output << "\033[0m";
-    // Fill to end
-    for (int i = used; i < cols; ++i) output << " ";
+    output << command_text;
+    int used = command_text.length();
+    
+    // Fill remaining space with background color
+    fill_line_with_bg(output, used, cols, bg_color);
+    
     output << "\n";
 }
 
 void TUI::draw_detail_view(std::stringstream& output, int cols, int rows) {
     // Detail view with clean formatting
-    output << "\033[1;37;44m"; // Bold white on blue
-    output << " Detail View ";
-    int used = 13;
-    for (int i = used; i < cols; ++i) output << " ";
-    output << "\033[0m";
-    // Fill to end
-    for (int i = used; i < cols; ++i) output << " ";
+    const std::string bg_color = "\033[1;37;44m"; // Bold white on blue
+    output << bg_color;
+    std::string title = " Detail View ";
+    output << title;
+    int used = title.length();
+    
+    // Fill remaining space with background color
+    fill_line_with_bg(output, used, cols, bg_color);
     output << "\n";
     
     if (current_tab_ == Tab::Runways) {
@@ -1528,6 +1537,18 @@ std::string TUI::truncate_string(const std::string& str, size_t max_len) {
         return str;
     }
     return str.substr(0, max_len - 3) + "...";
+}
+
+// Helper function to fill remaining line with background color
+// This ensures background color extends to the full width
+void TUI::fill_line_with_bg(std::stringstream& output, int current_pos, int total_width, const std::string& bg_color) {
+    if (current_pos < total_width) {
+        output << bg_color;
+        for (int i = current_pos; i < total_width; ++i) {
+            output << " ";
+        }
+        output << "\033[0m"; // Reset
+    }
 }
 
 std::string TUI::get_runway_status_string(std::shared_ptr<Runway> runway, const std::string& target) {

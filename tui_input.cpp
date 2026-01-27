@@ -143,7 +143,15 @@ void TUI::handle_input() {
                     // Switch tabs with 1-5 keys
                     int tab_num = vk - '1';
                     switch_tab(static_cast<Tab>(tab_num));
-                } else if (vk == 'Q' || vk == 'q') {
+                } else if (vk == 'q') {
+                    // 'q' behaves like ESC: hides detail view when in detail view, quits otherwise
+                    if (detail_view_) {
+                        hide_detail();
+                    } else {
+                        show_quit_confirmation();
+                    }
+                } else if (vk == 'Q') {
+                    // 'Q' always quits (with confirmation)
                     show_quit_confirmation();
                 } else if (vk == VK_OEM_2 || vk == 0xBF) { // ? key
                     switch_tab(Tab::Help);
@@ -271,7 +279,15 @@ void TUI::handle_input() {
                 // Switch tabs with 1-5 keys
                 int tab_num = buf[0] - '1';
                 switch_tab(static_cast<Tab>(tab_num));
-            } else if (buf[0] == 'q' || buf[0] == 'Q') {
+            } else if (buf[0] == 'q') {
+                // 'q' behaves like ESC: hides detail view when in detail view, quits otherwise
+                if (detail_view_) {
+                    hide_detail();
+                } else {
+                    show_quit_confirmation();
+                }
+            } else if (buf[0] == 'Q') {
+                // 'Q' always quits (with confirmation)
                 show_quit_confirmation();
             } else if (buf[0] == '?') {
                 switch_tab(Tab::Help);
@@ -360,17 +376,10 @@ void TUI::navigate_page_up() {
     
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
-    int cols = get_terminal_cols();
     
-    // Account for margins and UI elements (status bar, tab bar, summary, command bar)
-    const int margin_top = 1;
-    const int margin_bottom = 1;
-    const int status_h = 1;
-    const int tab_h = 1;
-    const int summary_h = 1;
-    const int cmd_h = 1;
-    int available_rows = rows - margin_top - margin_bottom;
-    int content_h = available_rows - status_h - tab_h - summary_h - cmd_h;
+    // Account for margins and UI elements - use centralized constants
+    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
+    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Visible items in the content area (minus header and borders)
     int visible_items = content_h - 3; // Leave space for header and borders
@@ -395,17 +404,10 @@ void TUI::navigate_page_down() {
     
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
-    int cols = get_terminal_cols();
     
-    // Account for margins and UI elements (status bar, tab bar, summary, command bar)
-    const int margin_top = 1;
-    const int margin_bottom = 1;
-    const int status_h = 1;
-    const int tab_h = 1;
-    const int summary_h = 1;
-    const int cmd_h = 1;
-    int available_rows = rows - margin_top - margin_bottom;
-    int content_h = available_rows - status_h - tab_h - summary_h - cmd_h;
+    // Account for margins and UI elements - use centralized constants
+    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
+    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Visible items in the content area (minus header and borders)
     int visible_items = content_h - 3; // Leave space for header and borders
@@ -428,17 +430,10 @@ void TUI::navigate_half_page_up() {
     
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
-    int cols = get_terminal_cols();
     
-    // Account for margins and UI elements
-    const int margin_top = 1;
-    const int margin_bottom = 1;
-    const int status_h = 1;
-    const int tab_h = 1;
-    const int summary_h = 1;
-    const int cmd_h = 1;
-    int available_rows = rows - margin_top - margin_bottom;
-    int content_h = available_rows - status_h - tab_h - summary_h - cmd_h;
+    // Account for margins and UI elements - use centralized constants
+    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
+    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Half page = half of visible items
     int visible_items = content_h - 3;
@@ -465,17 +460,10 @@ void TUI::navigate_half_page_down() {
     
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
-    int cols = get_terminal_cols();
     
-    // Account for margins and UI elements
-    const int margin_top = 1;
-    const int margin_bottom = 1;
-    const int status_h = 1;
-    const int tab_h = 1;
-    const int summary_h = 1;
-    const int cmd_h = 1;
-    int available_rows = rows - margin_top - margin_bottom;
-    int content_h = available_rows - status_h - tab_h - summary_h - cmd_h;
+    // Account for margins and UI elements - use centralized constants
+    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
+    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Half page = half of visible items
     int visible_items = content_h - 3;
