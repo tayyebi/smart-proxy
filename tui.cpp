@@ -17,11 +17,25 @@
 #include <windows.h>
 #include <io.h>
 #include <conio.h>
+// Undefine Windows min/max macros that conflict with std::min/std::max
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 #else
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <fcntl.h>
+#endif
+
+// Cross-platform unused parameter macro
+#ifdef _WIN32
+#define UNUSED_PARAM(x)
+#else
+#define UNUSED_PARAM(x) __attribute__((unused))
 #endif
 
 TUI::TUI(std::shared_ptr<RunwayManager> runway_manager,
@@ -344,65 +358,31 @@ void TUI::draw() {
         return;
     }
     
-    // Calculate available space with margins
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int available_cols = cols - MARGIN_LEFT - MARGIN_RIGHT;
-    
-    if (available_rows < 10 || available_cols < 60) {
-        std::cout << "\033[2J\033[1;1H";
-        std::cout << "Terminal too small after margins\n";
-        std::cout.flush();
-        return;
-    }
-    
     // Build entire frame in stringstream for single atomic output
     std::stringstream output;
     output << "\033[2J\033[1;1H"; // Clear screen and move to top
     
-    // Add top margin (blank lines)
-    for (int i = 0; i < MARGIN_TOP; ++i) {
-        output << "\n";
-    }
-    
-    // Helper lambda to add left margin
-    auto add_left_margin = [&]() {
-        for (int i = 0; i < MARGIN_LEFT; ++i) {
-            output << " ";
-        }
-    };
-    
     // Draw detail view if active
     if (detail_view_) {
-        add_left_margin();
-        draw_detail_view(output, available_cols, available_rows);
+        draw_detail_view(output, cols, rows);
     } else {
         // Status bar
-        add_left_margin();
-        draw_status_bar(output, available_cols);
+        draw_status_bar(output, cols);
         
         // Tab bar
-        add_left_margin();
-        draw_tab_bar(output, available_cols);
+        draw_tab_bar(output, cols);
         
         // Content area (remaining space) - use centralized constants
-        int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+        int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
         
         // Content
-        add_left_margin();
-        draw_content_area(output, available_cols, content_h);
+        draw_content_area(output, cols, content_h);
         
         // Summary bar
-        add_left_margin();
-        draw_summary_bar(output, available_cols);
+        draw_summary_bar(output, cols);
         
         // Command bar
-        add_left_margin();
-        draw_command_bar(output, available_cols);
-    }
-    
-    // Add bottom margin (blank lines)
-    for (int i = 0; i < MARGIN_BOTTOM; ++i) {
-        output << "\n";
+        draw_command_bar(output, cols);
     }
     
     // Single atomic output for maximum responsiveness
@@ -620,9 +600,9 @@ void TUI::draw_status_bar(std::stringstream& output, int cols) {
                          " | Total: " + std::to_string(proxy_server_->get_total_connections());
     
     // Calculate actual visible width (ANSI codes don't count)
-    int title_len = title.length();
-    int status_len = status_text.length();
-    int metrics_len = metrics.length();
+    int title_len = static_cast<int>(title.length());
+    int status_len = static_cast<int>(status_text.length());
+    int metrics_len = static_cast<int>(metrics.length());
     int space_len = 1; // Space between status and metrics
     
     int total_content_len = title_len + status_len + metrics_len + space_len;
@@ -716,7 +696,7 @@ void TUI::draw_content_area(std::stringstream& output, int cols, int max_rows) {
 // Table rendering helpers
 void TUI::draw_table_border(std::stringstream& output, const std::string& title, int cols) {
     output << "┌─ " << title;
-    int used = 3 + title.length();
+    int used = 3 + static_cast<int>(title.length());
     for (int i = used; i < cols - 1; ++i) {
         output << "─";
     }
@@ -729,7 +709,7 @@ void TUI::draw_table_header(std::stringstream& output, const std::vector<std::pa
         std::string header = col.first;
         int width = col.second;
         output << " " << header;
-        int padding = width - header.length() - 1;
+        int padding = width - static_cast<int>(header.length()) - 1;
         for (int i = 0; i < padding; ++i) {
             output << " ";
         }
@@ -787,7 +767,7 @@ void TUI::draw_table_row(std::stringstream& output, const std::vector<std::strin
         }
         
         output << " " << cell;
-        int padding = width - cell.length() - 1;
+        int padding = width - static_cast<int>(cell.length()) - 1;
         for (int j = 0; j < padding; ++j) {
             output << " ";
         }
@@ -1167,7 +1147,10 @@ void TUI::draw_stats_tab(std::stringstream& output, int cols, int /*max_rows*/) 
     output << "┘\n";
 }
 
-void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows __attribute__((unused))) {
+void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows UNUSED_PARAM(max_rows)) {
+#ifdef _WIN32
+    (void)max_rows; // Suppress unused parameter warning on Windows
+#endif
     std::string title = "Help & Shortcuts";
     draw_table_border(output, title, cols);
     
@@ -1204,7 +1187,7 @@ void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows __attr
     for (const auto& shortcut : shortcuts) {
         output << "│ " << std::setw(12) << std::left << shortcut.first;
         output << " " << shortcut.second;
-        int used = 15 + shortcut.first.length() + shortcut.second.length();
+        int used = 15 + static_cast<int>(shortcut.first.length() + shortcut.second.length());
         for (int i = used; i < cols - 1; ++i) output << " ";
         output << "│\n";
     }
@@ -1230,7 +1213,7 @@ void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows __attr
     for (const auto& op : mouse_ops) {
         output << "│ " << std::setw(15) << std::left << op.first;
         output << " " << op.second;
-        int used = 18 + op.first.length() + op.second.length();
+        int used = 18 + static_cast<int>(op.first.length() + op.second.length());
         for (int i = used; i < cols - 1; ++i) output << " ";
         output << "│\n";
     }
@@ -1264,8 +1247,8 @@ void TUI::draw_summary_bar(std::stringstream& output, int cols) {
     std::string separator = " | ";
     
     // Calculate visible length (3 separators between 4 items)
-    int visible_len = stats_label.length() + runways_text.length() + targets_text.length() + 
-                      conns_text.length() + throughput_text.length() + (3 * separator.length());
+    int visible_len = static_cast<int>(stats_label.length() + runways_text.length() + targets_text.length() + 
+                      conns_text.length() + throughput_text.length() + (3 * separator.length()));
     
     // Output with ANSI codes for bold "Stats:"
     output << "\033[1m" << stats_label << "\033[0m";
@@ -1293,7 +1276,7 @@ void TUI::draw_command_bar(std::stringstream& output, int cols) {
     }
     
     output << command_text;
-    int used = command_text.length();
+    int used = static_cast<int>(command_text.length());
     
     // Fill remaining space with background color
     fill_line_with_bg(output, used, cols, bg_color);
@@ -1307,7 +1290,7 @@ void TUI::draw_detail_view(std::stringstream& output, int cols, int rows) {
     output << bg_color;
     std::string title = " Detail View ";
     output << title;
-    int used = title.length();
+    int used = static_cast<int>(title.length());
     
     // Fill remaining space with background color
     fill_line_with_bg(output, used, cols, bg_color);
@@ -1646,7 +1629,11 @@ void TUI::handle_mouse_click(int button, int x, int y) {
     }
 }
 
-void TUI::handle_mouse_scroll(int direction, int x __attribute__((unused)), int y __attribute__((unused))) {
+void TUI::handle_mouse_scroll(int direction, int x UNUSED_PARAM(x), int y UNUSED_PARAM(y)) {
+#ifdef _WIN32
+    (void)x; // Suppress unused parameter warning on Windows
+    (void)y;
+#endif
     if (detail_view_ || current_tab_ == Tab::Stats || current_tab_ == Tab::Help) {
         return;
     }

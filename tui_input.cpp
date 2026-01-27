@@ -6,19 +6,23 @@
 #include <iostream>
 #include <cstring>
 #include <ctime>
-#include <unistd.h>
-#include <sys/select.h>
-#include <sys/time.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <conio.h>
+// Undefine Windows min/max macros that conflict with std::min/std::max
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 #else
 #include <unistd.h>
-#include <termios.h>
-#include <fcntl.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <termios.h>
+#include <fcntl.h>
 #endif
 
 // Non-blocking keyboard input handling (zero dependencies, standard library only)
@@ -377,9 +381,8 @@ void TUI::navigate_page_up() {
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
     
-    // Account for margins and UI elements - use centralized constants
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+    // Account for UI elements - use centralized constants
+    int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Visible items in the content area (minus header and borders)
     int visible_items = content_h - 3; // Leave space for header and borders
@@ -405,9 +408,8 @@ void TUI::navigate_page_down() {
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
     
-    // Account for margins and UI elements - use centralized constants
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+    // Account for UI elements - use centralized constants
+    int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Visible items in the content area (minus header and borders)
     int visible_items = content_h - 3; // Leave space for header and borders
@@ -431,9 +433,8 @@ void TUI::navigate_half_page_up() {
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
     
-    // Account for margins and UI elements - use centralized constants
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+    // Account for UI elements - use centralized constants
+    int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Half page = half of visible items
     int visible_items = content_h - 3;
@@ -461,9 +462,8 @@ void TUI::navigate_half_page_down() {
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
     
-    // Account for margins and UI elements - use centralized constants
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+    // Account for UI elements - use centralized constants
+    int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Half page = half of visible items
     int visible_items = content_h - 3;

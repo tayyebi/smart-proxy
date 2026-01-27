@@ -126,14 +126,22 @@ void Logger::close() {
 
 std::string Logger::format_timestamp(uint64_t timestamp) {
     std::time_t time_val = static_cast<std::time_t>(timestamp);
-    std::tm* tm_info = std::localtime(&time_val);
+    std::tm tm_info;
     
-    if (!tm_info) {
+#ifdef _WIN32
+    // Use localtime_s on Windows (thread-safe)
+    if (localtime_s(&tm_info, &time_val) != 0) {
         return "0000-00-00 00:00:00";
     }
+#else
+    // Use localtime_r on POSIX (thread-safe)
+    if (localtime_r(&time_val, &tm_info) == nullptr) {
+        return "0000-00-00 00:00:00";
+    }
+#endif
     
     std::stringstream ss;
-    ss << std::put_time(tm_info, "%Y-%m-%d %H:%M:%S");
+    ss << std::put_time(&tm_info, "%Y-%m-%d %H:%M:%S");
     return ss.str();
 }
 

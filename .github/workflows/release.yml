@@ -59,7 +59,7 @@ jobs:
             cc: arm-linux-gnueabihf-gcc
             cxx: arm-linux-gnueabihf-g++
             cross: true
-            cflags: -march=armv6 -mfpu=vfp -mfloat-abi=hard
+            cflags: -march=armv6 -mfpu=vfp -mfloat-abi=softfp -marm
           # Linux MIPS64
           - os: ubuntu-latest
             target: linux
