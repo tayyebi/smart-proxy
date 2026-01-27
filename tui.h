@@ -129,11 +129,6 @@ private:
     bool quit_confirmed_; // Quit confirmation flag
     
     // Layout constants - centralized for safe TUI rendering
-    // Change these to adjust margins dynamically
-    static constexpr int MARGIN_TOP = 1;
-    static constexpr int MARGIN_BOTTOM = 1;
-    static constexpr int MARGIN_LEFT = 2;
-    static constexpr int MARGIN_RIGHT = 2;
     static constexpr int STATUS_BAR_HEIGHT = 1;
     static constexpr int TAB_BAR_HEIGHT = 1;
     static constexpr int SUMMARY_BAR_HEIGHT = 1;

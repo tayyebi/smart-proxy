@@ -358,13 +358,9 @@ void TUI::draw() {
         return;
     }
     
-    // Calculate available space with margins
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int available_cols = cols - MARGIN_LEFT - MARGIN_RIGHT;
-    
-    if (available_rows < 10 || available_cols < 60) {
+    if (rows < 10 || cols < 60) {
         std::cout << "\033[2J\033[1;1H";
-        std::cout << "Terminal too small after margins\n";
+        std::cout << "Terminal too small\n";
         std::cout.flush();
         return;
     }
@@ -373,50 +369,27 @@ void TUI::draw() {
     std::stringstream output;
     output << "\033[2J\033[1;1H"; // Clear screen and move to top
     
-    // Add top margin (blank lines)
-    for (int i = 0; i < MARGIN_TOP; ++i) {
-        output << "\n";
-    }
-    
-    // Helper lambda to add left margin
-    auto add_left_margin = [&]() {
-        for (int i = 0; i < MARGIN_LEFT; ++i) {
-            output << " ";
-        }
-    };
-    
     // Draw detail view if active
     if (detail_view_) {
-        add_left_margin();
-        draw_detail_view(output, available_cols, available_rows);
+        draw_detail_view(output, cols, rows);
     } else {
         // Status bar
-        add_left_margin();
-        draw_status_bar(output, available_cols);
+        draw_status_bar(output, cols);
         
         // Tab bar
-        add_left_margin();
-        draw_tab_bar(output, available_cols);
+        draw_tab_bar(output, cols);
         
         // Content area (remaining space) - use centralized constants
-        int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+        int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
         
         // Content
-        add_left_margin();
-        draw_content_area(output, available_cols, content_h);
+        draw_content_area(output, cols, content_h);
         
         // Summary bar
-        add_left_margin();
-        draw_summary_bar(output, available_cols);
+        draw_summary_bar(output, cols);
         
         // Command bar
-        add_left_margin();
-        draw_command_bar(output, available_cols);
-    }
-    
-    // Add bottom margin (blank lines)
-    for (int i = 0; i < MARGIN_BOTTOM; ++i) {
-        output << "\n";
+        draw_command_bar(output, cols);
     }
     
     // Single atomic output for maximum responsiveness

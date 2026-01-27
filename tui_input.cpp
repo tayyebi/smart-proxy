@@ -374,9 +374,8 @@ void TUI::navigate_page_up() {
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
     
-    // Account for margins and UI elements - use centralized constants
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+    // Account for UI elements - use centralized constants
+    int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Visible items in the content area (minus header and borders)
     int visible_items = content_h - 3; // Leave space for header and borders
@@ -402,9 +401,8 @@ void TUI::navigate_page_down() {
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
     
-    // Account for margins and UI elements - use centralized constants
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+    // Account for UI elements - use centralized constants
+    int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Visible items in the content area (minus header and borders)
     int visible_items = content_h - 3; // Leave space for header and borders
@@ -428,9 +426,8 @@ void TUI::navigate_half_page_up() {
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
     
-    // Account for margins and UI elements - use centralized constants
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+    // Account for UI elements - use centralized constants
+    int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Half page = half of visible items
     int visible_items = content_h - 3;
@@ -458,9 +455,8 @@ void TUI::navigate_half_page_down() {
     // Calculate visible items based on terminal size
     int rows = get_terminal_rows();
     
-    // Account for margins and UI elements - use centralized constants
-    int available_rows = rows - MARGIN_TOP - MARGIN_BOTTOM;
-    int content_h = available_rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
+    // Account for UI elements - use centralized constants
+    int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
     
     // Half page = half of visible items
     int visible_items = content_h - 3;
