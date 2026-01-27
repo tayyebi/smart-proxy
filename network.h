@@ -15,9 +15,10 @@
 #include <ws2tcpip.h>
 typedef SOCKET socket_t;
 // MSVC doesn't define ssize_t, so we define it here
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(_SSIZE_T_DEFINED)
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
+#define _SSIZE_T_DEFINED
 #endif
 #else
 #include <sys/socket.h>
