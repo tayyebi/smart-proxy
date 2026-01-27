@@ -619,27 +619,30 @@ void TUI::draw_status_bar(std::stringstream& output, int cols) {
                          " | Active: " + std::to_string(proxy_server_->get_active_connections()) +
                          " | Total: " + std::to_string(proxy_server_->get_total_connections());
     
-    // Calculate actual width used (excluding ANSI codes)
+    // Calculate actual visible width (ANSI codes don't count)
     int title_len = title.length();
     int status_len = status_text.length();
     int metrics_len = metrics.length();
-    int space_for_status_metrics = 1; // Space between status and metrics
+    int space_len = 1; // Space between status and metrics
     
-    int total_content = title_len + status_len + metrics_len + space_for_status_metrics;
+    int total_content_len = title_len + status_len + metrics_len + space_len;
     
-    // Fill middle padding
-    if (total_content < cols) {
-        int padding = cols - total_content;
+    // Fill middle padding with background color
+    int current_pos = title_len;
+    if (total_content_len < cols) {
+        int padding = cols - total_content_len;
         for (int i = 0; i < padding; ++i) {
             output << " ";
         }
+        current_pos += padding;
     }
     
     // Output status and metrics with background color maintained
     output << "\033[1;32;44m" << status_text << bg_color << " " << metrics;
+    current_pos += status_len + space_len + metrics_len;
     
-    // Fill any remaining space to end of line
-    fill_line_with_bg(output, total_content, cols, bg_color);
+    // Fill any remaining space to end of line (safety check)
+    fill_line_with_bg(output, current_pos, cols, bg_color);
     
     output << "\n";
 }
@@ -1252,25 +1255,23 @@ void TUI::draw_summary_bar(std::stringstream& output, int cols) {
     uint64_t uptime_secs = std::time(nullptr) - start_time_;
     double throughput = (uptime_secs > 0) ? (static_cast<double>(total_bytes) / uptime_secs) : 0.0;
     
-    // Build stats text
-    std::stringstream stats;
-    stats << "\033[1mStats:\033[0m ";
-    stats << runways.size() << " runways";
-    stats << " | " << targets.size() << " targets";
-    stats << " | " << conns.size() << " active";
-    stats << " | " << utils::format_bytes(static_cast<uint64_t>(throughput)) << "/s";
+    // Build stats content (calculate visible length first)
+    std::string stats_label = "Stats: ";
+    std::string runways_text = std::to_string(runways.size()) + " runways";
+    std::string targets_text = std::to_string(targets.size()) + " targets";
+    std::string conns_text = std::to_string(conns.size()) + " active";
+    std::string throughput_text = utils::format_bytes(static_cast<uint64_t>(throughput)) + "/s";
     
-    output << stats.str();
+    // Calculate visible length (6 chars for " | " x3 separators)
+    int visible_len = stats_label.length() + runways_text.length() + targets_text.length() + 
+                      conns_text.length() + throughput_text.length() + 9; // 3 separators " | "
     
-    // Calculate actual visible length (approximate, excluding ANSI codes)
-    std::string stats_plain = "Stats: " + std::to_string(runways.size()) + " runways | " + 
-                              std::to_string(targets.size()) + " targets | " + 
-                              std::to_string(conns.size()) + " active | " + 
-                              utils::format_bytes(static_cast<uint64_t>(throughput)) + "/s";
-    int used = stats_plain.length();
+    // Output with ANSI codes for bold "Stats:"
+    output << "\033[1m" << stats_label << "\033[0m";
+    output << runways_text << " | " << targets_text << " | " << conns_text << " | " << throughput_text;
     
     // Fill remaining space
-    for (int i = used; i < cols; ++i) output << " ";
+    for (int i = visible_len; i < cols; ++i) output << " ";
     output << "\n";
 }
 
