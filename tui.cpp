@@ -17,11 +17,25 @@
 #include <windows.h>
 #include <io.h>
 #include <conio.h>
+// Undefine Windows min/max macros that conflict with std::min/std::max
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 #else
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <fcntl.h>
+#endif
+
+// Cross-platform unused parameter macro
+#ifdef _WIN32
+#define UNUSED_PARAM(x)
+#else
+#define UNUSED_PARAM(x) __attribute__((unused))
 #endif
 
 TUI::TUI(std::shared_ptr<RunwayManager> runway_manager,
@@ -1167,7 +1181,7 @@ void TUI::draw_stats_tab(std::stringstream& output, int cols, int /*max_rows*/) 
     output << "┘\n";
 }
 
-void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows __attribute__((unused))) {
+void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows UNUSED_PARAM(max_rows)) {
     std::string title = "Help & Shortcuts";
     draw_table_border(output, title, cols);
     
@@ -1646,7 +1660,7 @@ void TUI::handle_mouse_click(int button, int x, int y) {
     }
 }
 
-void TUI::handle_mouse_scroll(int direction, int x __attribute__((unused)), int y __attribute__((unused))) {
+void TUI::handle_mouse_scroll(int direction, int x UNUSED_PARAM(x), int y UNUSED_PARAM(y)) {
     if (detail_view_ || current_tab_ == Tab::Stats || current_tab_ == Tab::Help) {
         return;
     }

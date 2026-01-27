@@ -49,13 +49,19 @@ else()
     # Allow cross-compilation flags from environment
     if(CMAKE_CROSSCOMPILING)
         if(DEFINED ENV{CFLAGS})
-            target_compile_options(smartproxy PRIVATE $ENV{CFLAGS})
+            # Convert space-separated string to CMake list
+            string(REPLACE " " ";" CFLAGS_LIST "$ENV{CFLAGS}")
+            target_compile_options(smartproxy PRIVATE ${CFLAGS_LIST})
         endif()
         if(DEFINED ENV{CXXFLAGS})
-            target_compile_options(smartproxy PRIVATE $ENV{CXXFLAGS})
+            # Convert space-separated string to CMake list
+            string(REPLACE " " ";" CXXFLAGS_LIST "$ENV{CXXFLAGS}")
+            target_compile_options(smartproxy PRIVATE ${CXXFLAGS_LIST})
         endif()
         if(DEFINED ENV{LDFLAGS})
-            target_link_options(smartproxy PRIVATE $ENV{LDFLAGS})
+            # Convert space-separated string to CMake list
+            string(REPLACE " " ";" LDFLAGS_LIST "$ENV{LDFLAGS}")
+            target_link_options(smartproxy PRIVATE ${LDFLAGS_LIST})
         endif()
     endif()
 endif()

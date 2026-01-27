@@ -10,9 +10,12 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <io.h>
-#define mkdir(path, mode) _mkdir(path)
+// On Windows, use _mkdir which takes only path parameter
+#define MKDIR(path) _mkdir(path)
 #else
 #include <unistd.h>
+// On POSIX, use mkdir which takes path and mode parameters
+#define MKDIR(path) mkdir(path, 0755)
 #endif
 
 #ifdef _WIN32
@@ -189,15 +192,9 @@ bool create_directory(const std::string& path) {
     }
     
     // Create directory
-#ifdef _WIN32
-    if (mkdir(path.c_str()) == 0) {
+    if (MKDIR(path.c_str()) == 0) {
         return true;
     }
-#else
-    if (mkdir(path.c_str(), 0755) == 0) {
-        return true;
-    }
-#endif
     
     // Try to create parent directories if needed
     size_t pos = path.find_last_of("/\\");
@@ -205,11 +202,7 @@ bool create_directory(const std::string& path) {
         std::string parent = path.substr(0, pos);
         if (!parent.empty() && create_directory(parent)) {
             // Retry creating the directory
-#ifdef _WIN32
-            return mkdir(path.c_str()) == 0;
-#else
-            return mkdir(path.c_str(), 0755) == 0;
-#endif
+            return MKDIR(path.c_str()) == 0;
         }
     }
     

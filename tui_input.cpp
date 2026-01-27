@@ -6,19 +6,16 @@
 #include <iostream>
 #include <cstring>
 #include <ctime>
-#include <unistd.h>
-#include <sys/select.h>
-#include <sys/time.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <conio.h>
 #else
 #include <unistd.h>
-#include <termios.h>
-#include <fcntl.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <termios.h>
+#include <fcntl.h>
 #endif
 
 // Non-blocking keyboard input handling (zero dependencies, standard library only)

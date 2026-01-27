@@ -1,6 +1,17 @@
 #include "health.h"
 #include <chrono>
 #include <thread>
+#include <algorithm>
+
+// Undefine Windows min/max macros that conflict with std::min/std::max
+#ifdef _WIN32
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+#endif
 
 HealthMonitor::HealthMonitor(
     std::shared_ptr<RunwayManager> runway_manager,
