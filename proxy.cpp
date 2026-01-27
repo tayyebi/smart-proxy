@@ -860,7 +860,7 @@ std::shared_ptr<Runway> ProxyServer::test_all_runways(
     
     // Test runways
     for (const auto& runway : prioritized) {
-        auto result = runway_manager_->test_runway_accessibility(target, runway, config_.accessibility_timeout);
+        auto result = runway_manager_->test_runway_accessibility(target, runway, static_cast<double>(config_.accessibility_timeout));
         bool net_success = std::get<0>(result);
         bool user_success = std::get<1>(result);
         double response_time = std::get<2>(result);
