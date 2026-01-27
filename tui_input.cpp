@@ -10,6 +10,13 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <conio.h>
+// Undefine Windows min/max macros that conflict with std::min/std::max
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 #else
 #include <unistd.h>
 #include <sys/select.h>
