@@ -719,7 +719,7 @@ ProxyServer::make_http_request(const HTTPRequest& request, const std::string& ta
     } else {
         auto dns_result = dns_resolver_->resolve(target_host);
         if (dns_result.first.empty()) {
-            return std::make_tuple(false, false, 502, 
+            return std::make_tuple(false, false, static_cast<uint16_t>(502), 
                                   std::map<std::string, std::string>(), 
                                   std::vector<uint8_t>());
         }
@@ -729,7 +729,7 @@ ProxyServer::make_http_request(const HTTPRequest& request, const std::string& ta
     // Connect to target
     socket_t sock = network::create_tcp_socket();
     if (sock == network::INVALID_SOCKET_VALUE) {
-        return std::make_tuple(false, false, 502,
+        return std::make_tuple(false, false, static_cast<uint16_t>(502),
                               std::map<std::string, std::string>(),
                               std::vector<uint8_t>());
     }
@@ -750,7 +750,7 @@ ProxyServer::make_http_request(const HTTPRequest& request, const std::string& ta
     bool connected = network::connect_socket(sock, resolved_ip, target_port);
     if (!connected) {
         network::close_socket(sock);
-        return std::make_tuple(false, false, 502,
+        return std::make_tuple(false, false, static_cast<uint16_t>(502),
                               std::map<std::string, std::string>(),
                               std::vector<uint8_t>());
     }
@@ -784,7 +784,7 @@ ProxyServer::make_http_request(const HTTPRequest& request, const std::string& ta
     std::string status_line;
     if (!read_line(sock, status_line)) {
         network::close_socket(sock);
-        return std::make_tuple(false, false, 502,
+        return std::make_tuple(false, false, static_cast<uint16_t>(502),
                               std::map<std::string, std::string>(),
                               std::vector<uint8_t>());
     }
@@ -793,7 +793,7 @@ ProxyServer::make_http_request(const HTTPRequest& request, const std::string& ta
     std::vector<std::string> status_parts = utils::split(status_line, ' ');
     if (status_parts.size() < 3) {
         network::close_socket(sock);
-        return std::make_tuple(false, false, 502,
+        return std::make_tuple(false, false, static_cast<uint16_t>(502),
                               std::map<std::string, std::string>(),
                               std::vector<uint8_t>());
     }
@@ -801,7 +801,7 @@ ProxyServer::make_http_request(const HTTPRequest& request, const std::string& ta
     uint16_t status_code;
     if (!utils::safe_str_to_uint16(status_parts[1], status_code)) {
         network::close_socket(sock);
-        return std::make_tuple(false, false, 502,
+        return std::make_tuple(false, false, static_cast<uint16_t>(502),
                               std::map<std::string, std::string>(),
                               std::vector<uint8_t>());
     }
@@ -810,7 +810,7 @@ ProxyServer::make_http_request(const HTTPRequest& request, const std::string& ta
     std::map<std::string, std::string> response_headers;
     if (!read_headers(sock, response_headers)) {
         network::close_socket(sock);
-        return std::make_tuple(false, false, 502,
+        return std::make_tuple(false, false, static_cast<uint16_t>(502),
                               std::map<std::string, std::string>(),
                               std::vector<uint8_t>());
     }
@@ -819,7 +819,7 @@ ProxyServer::make_http_request(const HTTPRequest& request, const std::string& ta
     std::vector<uint8_t> response_body;
     if (!read_body(sock, response_body, response_headers)) {
         network::close_socket(sock);
-        return std::make_tuple(false, false, 502,
+        return std::make_tuple(false, false, static_cast<uint16_t>(502),
                               std::map<std::string, std::string>(),
                               std::vector<uint8_t>());
     }

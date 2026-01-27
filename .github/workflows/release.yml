@@ -405,7 +405,7 @@ jobs:
           name: ${{ matrix.binary }}
           path: ${{ matrix.binary }}
           if-no-files-found: warn
-          retention-days: 1
+          retention-days: 7
 
   release:
     needs: build
@@ -419,30 +419,35 @@ jobs:
         with:
           path: artifacts
 
-      - name: Filter valid binaries
+      - name: Prepare release assets
         run: |
+          mkdir -p release-assets
           cd artifacts
+          # Move all binaries from subdirectories to release-assets
+          find . -type f \( -executable -o -name "*.exe" \) -exec mv {} ../release-assets/ \;
           # Remove empty files (failed builds)
+          cd ../release-assets
           find . -type f -size 0 -delete
           # List valid binaries
           echo "Valid binaries:"
-          find . -type f -executable -o -name "*.exe" | sort
+          ls -lh
 
       - name: Create checksums
         run: |
-          cd artifacts
-          find . -type f -exec sha256sum {} \; > checksums.txt
+          cd release-assets
+          sha256sum * > checksums.txt
           echo ""
           echo "Checksums:"
           cat checksums.txt
 
       - name: Create release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: release-assets/*
           generate_release_notes: true
           draft: false
           prerelease: false
+          fail_on_unmatched_files: false
           body: |
             ## Smart Proxy Service Release
             
