@@ -51,6 +51,7 @@ cmake --build . --config Release
 ```
 
 ## Configuration
+The app will automatically create a default `config.json` if it does not exist on first run.
 
 Edit `config.json` to configure:
 - DNS servers

@@ -1,3 +1,64 @@
+#include <iomanip>
+// Helper: convert config to JSON string
+static std::string config_to_json(const Config& config) {
+    std::ostringstream oss;
+    oss << "{\n";
+    oss << "  \"routing_mode\": \"";
+    switch (config.routing_mode) {
+        case RoutingMode::Latency: oss << "Latency"; break;
+        case RoutingMode::FirstAccessible: oss << "FirstAccessible"; break;
+        case RoutingMode::RoundRobin: oss << "RoundRobin"; break;
+    }
+    oss << "\",\n";
+    oss << "  \"dns_servers\": [";
+    for (size_t i = 0; i < config.dns_servers.size(); ++i) {
+        const auto& dns = config.dns_servers[i];
+        oss << "{\"host\":\"" << dns.host << "\",\"port\":" << dns.port << ",\"name\":\"" << dns.name << "\"}";
+        if (i + 1 < config.dns_servers.size()) oss << ", ";
+    }
+    oss << "],\n";
+    oss << "  \"upstream_proxies\": [";
+    for (size_t i = 0; i < config.upstream_proxies.size(); ++i) {
+        const auto& up = config.upstream_proxies[i];
+        oss << "{\"proxy_type\":\"" << up.proxy_type << "\",\"host\":\"" << up.host << "\",\"port\":" << up.port << "}";
+        if (i + 1 < config.upstream_proxies.size()) oss << ", ";
+    }
+    oss << "],\n";
+    oss << "  \"interfaces\": [";
+    for (size_t i = 0; i < config.interfaces.size(); ++i) {
+        oss << "\"" << config.interfaces[i] << "\"";
+        if (i + 1 < config.interfaces.size()) oss << ", ";
+    }
+    oss << "],\n";
+    oss << "  \"health_check_interval\": " << config.health_check_interval << ",\n";
+    oss << "  \"accessibility_timeout\": " << config.accessibility_timeout << ",\n";
+    oss << "  \"dns_timeout\": " << config.dns_timeout << ",\n";
+    oss << "  \"network_timeout\": " << config.network_timeout << ",\n";
+    oss << "  \"user_validation_timeout\": " << config.user_validation_timeout << ",\n";
+    oss << "  \"max_concurrent_connections\": " << config.max_concurrent_connections << ",\n";
+    oss << "  \"max_connections_per_runway\": " << config.max_connections_per_runway << ",\n";
+    oss << "  \"success_rate_threshold\": " << config.success_rate_threshold << ",\n";
+    oss << "  \"success_rate_window\": " << config.success_rate_window << ",\n";
+    oss << "  \"log_level\": \"" << config.log_level << "\",\n";
+    oss << "  \"log_file\": \"" << config.log_file << "\",\n";
+    oss << "  \"log_max_bytes\": " << config.log_max_bytes << ",\n";
+    oss << "  \"log_backup_count\": " << config.log_backup_count << ",\n";
+    oss << "  \"proxy_listen_host\": \"" << config.proxy_listen_host << "\",\n";
+    oss << "  \"proxy_listen_port\": " << config.proxy_listen_port << ",\n";
+    oss << "  \"mouse_enabled\": " << (config.mouse_enabled ? "true" : "false") << ",\n";
+    oss << "  \"webui_enabled\": " << (config.webui_enabled ? "true" : "false") << ",\n";
+    oss << "  \"webui_listen_host\": \"" << config.webui_listen_host << "\",\n";
+    oss << "  \"webui_listen_port\": " << config.webui_listen_port << "\n";
+    oss << "}";
+    return oss.str();
+}
+
+bool Config::save(const std::string& path) const {
+    std::ofstream out(path);
+    if (!out.is_open()) return false;
+    out << config_to_json(*this) << std::endl;
+    return true;
+}
 #include "config.h"
 #include "utils.h"
 #include <fstream>
@@ -27,6 +88,9 @@ Config::Config()
     , proxy_listen_host("127.0.0.1")
     , proxy_listen_port(2123)
     , mouse_enabled(false) // Disabled by default
+    , webui_enabled(false) // Disabled by default
+    , webui_listen_host("127.0.0.1")
+    , webui_listen_port(8080)
 {
     interfaces.push_back("auto");
 }
@@ -344,6 +408,33 @@ Config Config::parse_json(const std::string& json_str) {
             val = val.substr(1, val.length() - 2);
         }
         config.mouse_enabled = (val == "true" || val == "1");
+    }
+    
+    // Parse webui_enabled boolean
+    if (root.find("webui_enabled") != root.end()) {
+        std::string val = utils::to_lower(utils::trim(root["webui_enabled"]));
+        // Remove quotes if present
+        if (val.length() >= 2 && val[0] == '"' && val[val.length()-1] == '"') {
+            val = val.substr(1, val.length() - 2);
+        }
+        config.webui_enabled = (val == "true" || val == "1");
+    }
+    
+    // Parse webui_listen_host
+    if (root.find("webui_listen_host") != root.end()) {
+        std::string host = utils::trim(root["webui_listen_host"]);
+        if (host.length() >= 2 && host[0] == '"' && host[host.length()-1] == '"') {
+            config.webui_listen_host = host.substr(1, host.length() - 2);
+        } else {
+            config.webui_listen_host = host;
+        }
+    }
+    
+    // Parse webui_listen_port
+    if (root.find("webui_listen_port") != root.end()) {
+        uint16_t val;
+        std::string s = utils::trim(root["webui_listen_port"]);
+        if (utils::safe_str_to_uint16(s, val)) config.webui_listen_port = val;
     }
     
     // Parse arrays (simplified - would need full array parsing for nested objects)

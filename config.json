@@ -6,8 +6,7 @@
     {"host": "9.9.9.9", "port": 53, "name": "Quad9 DNS"}
   ],
   "upstream_proxies": [
-    {"type": "http", "host": "proxy.example.com", "port": 8080},
-    {"type": "socks5", "host": "socks.example.com", "port": 1080}
+    {"type": "socks5", "host": "127.0.0.1", "port": 10808}
   ],
   "interfaces": ["auto"],
   "health_check_interval": 60,

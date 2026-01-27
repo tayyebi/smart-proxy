@@ -15,6 +15,7 @@
 #include "network.h"
 #include "utils.h"
 #include "tui.h"
+#include "webui.h"
 #include "logger.h"
 
 // Defensive terminal handling with double Ctrl+C support
@@ -83,7 +84,12 @@ int main(int /*argc*/, char* /*argv*/[]) {
 #endif
     
     // Load configuration
+    bool config_exists = utils::file_exists("config.json");
     Config config = Config::load("config.json");
+    if (!config_exists) {
+        config.save("config.json");
+        utils::safe_print("Created default config.json\n");
+    }
     
     // Ensure log directory and file exist
     if (!config.log_file.empty()) {
@@ -152,6 +158,24 @@ int main(int /*argc*/, char* /*argv*/[]) {
     
     Logger::instance().log(LogLevel::INFO, "Proxy server started on " + config.proxy_listen_host + ":" + std::to_string(config.proxy_listen_port));
     
+    // Initialize WebUI if enabled
+    std::unique_ptr<WebUI> webui;
+    if (config.webui_enabled) {
+        webui = std::make_unique<WebUI>(runway_manager, routing_engine, tracker, proxy_server, config);
+        if (webui->start()) {
+            if (utils::is_terminal()) {
+                std::cout << "Web UI started on http://" << config.webui_listen_host 
+                          << ":" << config.webui_listen_port << "\n";
+                utils::safe_flush();
+            }
+            Logger::instance().log(LogLevel::INFO, "Web UI started on http://" + config.webui_listen_host + ":" + std::to_string(config.webui_listen_port));
+        } else {
+            utils::safe_print("Warning: Failed to start Web UI\n");
+            utils::safe_flush();
+            webui.reset();
+        }
+    }
+    
     // Create and run TUI
     TUI tui(runway_manager, routing_engine, tracker, proxy_server, config);
     
@@ -172,6 +196,16 @@ int main(int /*argc*/, char* /*argv*/[]) {
         
         // TUI already displayed shutdown message and stopped, now clean up services
         tui.stop();
+        
+        // Stop WebUI if running
+        if (webui) {
+            if (utils::is_terminal()) {
+                utils::safe_print("Stopping Web UI...\n");
+                utils::safe_flush();
+            }
+            webui->stop();
+            webui.reset();
+        }
         
         // Stop services
         if (utils::is_terminal()) {

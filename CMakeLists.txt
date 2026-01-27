@@ -28,6 +28,7 @@ set(SOURCES
     logger.cpp
     tui.cpp
     tui_input.cpp
+    webui.cpp
     ${PLATFORM_SOURCES}
 )
 

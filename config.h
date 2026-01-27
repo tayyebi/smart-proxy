@@ -32,6 +32,8 @@ struct UpstreamProxyConfig {
 };
 
 struct Config {
+        // Save config to file as JSON
+        bool save(const std::string& path) const;
     RoutingMode routing_mode;
     std::vector<DNSServerConfig> dns_servers;
     std::vector<UpstreamProxyConfig> upstream_proxies;
@@ -52,6 +54,9 @@ struct Config {
     std::string proxy_listen_host;
     uint16_t proxy_listen_port;
     bool mouse_enabled; // Enable mouse support in TUI
+    bool webui_enabled; // Enable web UI server
+    std::string webui_listen_host; // Web UI listen host
+    uint16_t webui_listen_port; // Web UI listen port
     
     Config();
     static Config load(const std::string& path);
