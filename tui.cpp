@@ -1182,6 +1182,9 @@ void TUI::draw_stats_tab(std::stringstream& output, int cols, int /*max_rows*/) 
 }
 
 void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows UNUSED_PARAM(max_rows)) {
+#ifdef _WIN32
+    (void)max_rows; // Suppress unused parameter warning on Windows
+#endif
     std::string title = "Help & Shortcuts";
     draw_table_border(output, title, cols);
     
@@ -1661,6 +1664,10 @@ void TUI::handle_mouse_click(int button, int x, int y) {
 }
 
 void TUI::handle_mouse_scroll(int direction, int x UNUSED_PARAM(x), int y UNUSED_PARAM(y)) {
+#ifdef _WIN32
+    (void)x; // Suppress unused parameter warning on Windows
+    (void)y;
+#endif
     if (detail_view_ || current_tab_ == Tab::Stats || current_tab_ == Tab::Help) {
         return;
     }
