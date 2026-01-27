@@ -5,7 +5,9 @@
 echo "=== TUI Revision Verification ==="
 echo ""
 
-cd /home/runner/work/smart-proxy/smart-proxy
+# Change to script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$SCRIPT_DIR"
 
 # 1. Verify centralized constants exist
 echo "1. Checking centralized margin constants..."

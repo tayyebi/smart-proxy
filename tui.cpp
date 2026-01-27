@@ -1261,14 +1261,15 @@ void TUI::draw_summary_bar(std::stringstream& output, int cols) {
     std::string targets_text = std::to_string(targets.size()) + " targets";
     std::string conns_text = std::to_string(conns.size()) + " active";
     std::string throughput_text = utils::format_bytes(static_cast<uint64_t>(throughput)) + "/s";
+    std::string separator = " | ";
     
-    // Calculate visible length (6 chars for " | " x3 separators)
+    // Calculate visible length (3 separators between 4 items)
     int visible_len = stats_label.length() + runways_text.length() + targets_text.length() + 
-                      conns_text.length() + throughput_text.length() + 9; // 3 separators " | "
+                      conns_text.length() + throughput_text.length() + (3 * separator.length());
     
     // Output with ANSI codes for bold "Stats:"
     output << "\033[1m" << stats_label << "\033[0m";
-    output << runways_text << " | " << targets_text << " | " << conns_text << " | " << throughput_text;
+    output << runways_text << separator << targets_text << separator << conns_text << separator << throughput_text;
     
     // Fill remaining space
     for (int i = visible_len; i < cols; ++i) output << " ";
