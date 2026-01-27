@@ -166,7 +166,7 @@ std::string Logger::level_to_string(LogLevel level) {
         case LogLevel::DEBUG: return "DEBUG";
         case LogLevel::INFO: return "INFO";
         case LogLevel::WARN: return "WARN";
-        case LogLevel::ERROR: return "ERROR";
+        case LogLevel::ERROR_LEVEL: return "ERROR";
         default: return "INFO";
     }
 }

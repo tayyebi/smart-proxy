@@ -248,7 +248,7 @@ bool RunwayManager::test_direct_connection(
     std::shared_ptr<Runway> runway, const std::string& target_ip, double timeout_secs) {
     
     std::lock_guard<std::mutex> lock(mutex_);
-    if (interface_info_.find(runway->interface) == interface_info_.end()) {
+    if (interface_info_.find(runway->interface_name) == interface_info_.end()) {
         return false;
     }
     

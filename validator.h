@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
 // Success validation for different protocols
 // Validates user-level success vs network-level success

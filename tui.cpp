@@ -496,7 +496,7 @@ void TUI::draw_runways() {
             std::cout << " \033[31m[FAIL]\033[0m";
         }
         
-        std::cout << " " << runway->interface;
+        std::cout << " " << runway->interface_name;
         if (runway->upstream_proxy) {
             std::cout << " -> " << runway->upstream_proxy->config.host;
         }
@@ -878,7 +878,7 @@ void TUI::draw_runways_tab(std::stringstream& output, int cols, int max_rows) {
         std::vector<std::string> cells = {
             truncate_string(runway->id, 23),
             status_color + status_symbol + "\033[0m",
-            truncate_string(runway->interface, 10),
+            truncate_string(runway->interface_name, 10),
             proxy_str,
             "N/A" // Latency - can be calculated later
         };
@@ -1318,7 +1318,7 @@ void TUI::draw_detail_view(std::stringstream& output, int cols, int rows) {
             }
             
             output << "\n\033[1mDetails:\033[0m\n";
-            output << "  Interface: " << runway->interface << "\n";
+            output << "  Interface: " << runway->interface_name << "\n";
             output << "  Source IP: " << runway->source_ip << "\n";
             output << "  DNS Server: " << runway->dns_server->config.host 
                    << ":" << runway->dns_server->config.port;

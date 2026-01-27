@@ -38,7 +38,7 @@ struct UpstreamProxy {
 
 struct Runway {
     std::string id;
-    std::string interface;
+    std::string interface_name;
     std::string source_ip; // IPv4 address as string
     std::shared_ptr<UpstreamProxy> upstream_proxy;
     std::shared_ptr<DNSServer> dns_server;
@@ -46,11 +46,11 @@ struct Runway {
     bool is_direct;
     
     Runway() : is_direct(true) {}
-    Runway(const std::string& id, const std::string& interface, 
+    Runway(const std::string& id, const std::string& interface_name, 
            const std::string& source_ip,
            std::shared_ptr<UpstreamProxy> proxy,
            std::shared_ptr<DNSServer> dns)
-        : id(id), interface(interface), source_ip(source_ip),
+        : id(id), interface_name(interface_name), source_ip(source_ip),
           upstream_proxy(proxy), dns_server(dns),
           is_direct(proxy == nullptr) {}
     
