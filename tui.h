@@ -179,8 +179,10 @@ private:
     void fill_line_with_bg(std::stringstream& output, int current_pos, int total_width, const std::string& bg_color);
     
     // Layout calculations
-    int get_terminal_rows();
-    int get_terminal_cols();
+    int get_terminal_rows_raw();  // Raw terminal size without clamping
+    int get_terminal_cols_raw();  // Raw terminal size without clamping
+    int get_terminal_rows();      // Clamped to minimum
+    int get_terminal_cols();      // Clamped to minimum
     
     // Data collection
     std::vector<std::shared_ptr<Runway>> get_runways_snapshot();

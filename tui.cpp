@@ -188,60 +188,62 @@ void TUI::show_cursor() {
     }
 }
 
-int TUI::get_terminal_rows() {
+int TUI::get_terminal_rows_raw() {
 #ifdef _WIN32
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
         int rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-        if (rows != cached_rows_) {
-            cached_rows_ = rows;
-            terminal_resized_ = true;
-            should_redraw_ = true;
-        }
         return rows > 0 ? rows : 24;
     }
-    return cached_rows_ > 0 ? cached_rows_ : 24;
+    return 24;
 #else
     struct winsize w;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0) {
-        int rows = w.ws_row > 0 ? w.ws_row : 24;
-        if (rows != cached_rows_) {
-            cached_rows_ = rows;
-            terminal_resized_ = true;
-            should_redraw_ = true;
-        }
-        return rows;
+        return w.ws_row > 0 ? w.ws_row : 24;
     }
-    return cached_rows_ > 0 ? cached_rows_ : 24;
+    return 24;
 #endif
 }
 
-int TUI::get_terminal_cols() {
+int TUI::get_terminal_rows() {
+    constexpr int MIN_HEIGHT = 30;
+    int rows = get_terminal_rows_raw();
+    int clamped = rows < MIN_HEIGHT ? MIN_HEIGHT : rows;
+    if (clamped != cached_rows_) {
+        cached_rows_ = clamped;
+        terminal_resized_ = true;
+        should_redraw_ = true;
+    }
+    return clamped;
+}
+
+int TUI::get_terminal_cols_raw() {
 #ifdef _WIN32
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
         int cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-        if (cols != cached_cols_) {
-            cached_cols_ = cols;
-            terminal_resized_ = true;
-            should_redraw_ = true;
-        }
         return cols > 0 ? cols : 80;
     }
-    return cached_cols_ > 0 ? cached_cols_ : 80;
+    return 80;
 #else
     struct winsize w;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0) {
-        int cols = w.ws_col > 0 ? w.ws_col : 80;
-        if (cols != cached_cols_) {
-            cached_cols_ = cols;
-            terminal_resized_ = true;
-            should_redraw_ = true;
-        }
-        return cols;
+        return w.ws_col > 0 ? w.ws_col : 80;
     }
-    return cached_cols_ > 0 ? cached_cols_ : 80;
+    return 80;
 #endif
+}
+
+int TUI::get_terminal_cols() {
+    constexpr int MIN_WIDTH = 100;
+    int cols = get_terminal_cols_raw();
+    int clamped = cols < MIN_WIDTH ? MIN_WIDTH : cols;
+    if (clamped != cached_cols_) {
+        cached_cols_ = clamped;
+        terminal_resized_ = true;
+        should_redraw_ = true;
+    }
+    return clamped;
 }
 
 void TUI::run(volatile sig_atomic_t* shutdown_flag) {
@@ -352,44 +354,63 @@ void TUI::remove_connection(const std::string& conn_id) {
 
 void TUI::draw() {
     // Fast drawing - build entire frame in memory first, then single output
-    int rows = get_terminal_rows();
-    int cols = get_terminal_cols();
+    constexpr int MIN_WIDTH = 100;
+    constexpr int MIN_HEIGHT = 30;
     
-    // Use centralized constants for consistent layout
-    if (rows < MIN_TERMINAL_ROWS || cols < MIN_TERMINAL_COLS) {
+    // Get raw terminal size for warning check
+    int raw_rows = get_terminal_rows_raw();
+    int raw_cols = get_terminal_cols_raw();
+    
+    // Check if terminal is too small and show warning
+    if (raw_rows < MIN_HEIGHT || raw_cols < MIN_WIDTH) {
         std::cout << "\033[H\033[J"; // Move to home and clear
-        std::cout << "Terminal too small (min " << MIN_TERMINAL_COLS << "x" << MIN_TERMINAL_ROWS << ")\n";
-        std::cout << "Current: " << cols << "x" << rows << "\n";
+        std::cout << "Terminal too small (min " << MIN_WIDTH << "x" << MIN_HEIGHT << ")\n";
+        std::cout << "Current: " << raw_cols << "x" << raw_rows << "\n";
+        std::cout << "Please resize your terminal window.\n";
         std::cout.flush();
         return;
     }
     
+    // Get clamped sizes for drawing
+    int rows = get_terminal_rows();
+    int cols = get_terminal_cols();
+    
     // Build entire frame in stringstream for single atomic output
     std::stringstream output;
-    // Move cursor to home position (1,1) and clear from there to end of screen
-    // Using \033[H moves to top-left, \033[J clears from cursor to end
-    output << "\033[H\033[J";
+    
+    // Clear screen and position cursor at row 1, col 1
+    output << "\033[2J\033[1;1H";
     
     // Draw detail view if active
     if (detail_view_) {
         draw_detail_view(output, cols, rows);
     } else {
-        // Status bar
+        // Calculate positions explicitly
+        int current_row = 1;
+        
+        // Row 1: Status bar
+        output << "\033[" << current_row << ";1H";
         draw_status_bar(output, cols);
+        current_row += STATUS_BAR_HEIGHT;
         
-        // Tab bar
+        // Rows 2-3: Tab bar (2 lines)
+        output << "\033[" << current_row << ";1H";
         draw_tab_bar(output, cols);
+        current_row += TAB_BAR_HEIGHT;
         
-        // Content area (remaining space) - use centralized constants
+        // Content area
         int content_h = rows - STATUS_BAR_HEIGHT - TAB_BAR_HEIGHT - SUMMARY_BAR_HEIGHT - COMMAND_BAR_HEIGHT;
-        
-        // Content
+        output << "\033[" << current_row << ";1H";
         draw_content_area(output, cols, content_h);
+        current_row += content_h;
         
-        // Summary bar
+        // Summary bar (2 lines)
+        output << "\033[" << current_row << ";1H";
         draw_summary_bar(output, cols);
+        current_row += SUMMARY_BAR_HEIGHT;
         
-        // Command bar
+        // Command bar (2 lines - but last line has no newline)
+        output << "\033[" << current_row << ";1H";
         draw_command_bar(output, cols);
     }
     
@@ -702,9 +723,65 @@ void TUI::draw_content_area(std::stringstream& output, int cols, int max_rows) {
 }
 
 // Table rendering helpers
+
+// Helper to calculate visible length of string (excluding ANSI escape codes)
+static int visible_length(const std::string& str) {
+    int len = 0;
+    bool in_escape = false;
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == '\033') {
+            in_escape = true;
+        } else if (in_escape) {
+            if (str[i] == 'm') {
+                in_escape = false;
+            }
+        } else {
+            ++len;
+        }
+    }
+    return len;
+}
+
+// Helper to pad string to exact visible width
+static std::string pad_to_width(const std::string& str, int width) {
+    int vis_len = visible_length(str);
+    if (vis_len >= width) {
+        return str;
+    }
+    return str + std::string(width - vis_len, ' ');
+}
+
+// Helper to truncate string to max visible width (preserving ANSI codes at start)
+static std::string truncate_to_width(const std::string& str, int max_width) {
+    if (max_width <= 0) return "";
+    
+    int vis_len = 0;
+    size_t end_pos = 0;
+    std::string prefix_codes;
+    
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == '\033') {
+            size_t escape_start = i;
+            while (i < str.length() && str[i] != 'm') ++i;
+            if (vis_len == 0) {
+                prefix_codes += str.substr(escape_start, i - escape_start + 1);
+            }
+        } else {
+            ++vis_len;
+            end_pos = i + 1;
+            if (vis_len >= max_width - 3 && vis_len < visible_length(str)) {
+                // Need to truncate
+                return str.substr(0, end_pos) + "...\033[0m";
+            }
+        }
+    }
+    return str;
+}
+
 void TUI::draw_table_border(std::stringstream& output, const std::string& title, int cols) {
-    output << "┌─ " << title;
-    int used = 3 + static_cast<int>(title.length());
+    // ┌─ Title ─────────────────────────────────────────────────────────────────┐
+    output << "┌─ " << title << " ";
+    int used = 4 + static_cast<int>(title.length()); // "┌─ " + title + " "
     for (int i = used; i < cols - 1; ++i) {
         output << "─";
     }
@@ -712,56 +789,60 @@ void TUI::draw_table_border(std::stringstream& output, const std::string& title,
 }
 
 void TUI::draw_table_header(std::stringstream& output, const std::vector<std::pair<std::string, int>>& columns, int cols) {
+    // Calculate total table width from columns
+    int table_width = 1; // Starting │
+    for (const auto& col : columns) {
+        table_width += col.second + 1; // content + │
+    }
+    
+    // Header row
     output << "│";
     for (const auto& col : columns) {
-        std::string header = col.first;
-        int width = col.second;
-        output << " " << header;
-        int padding = width - static_cast<int>(header.length()) - 1;
-        for (int i = 0; i < padding; ++i) {
-            output << " ";
-        }
+        std::string header = " " + col.first;
+        header = pad_to_width(header, col.second);
+        output << header << "│";
+    }
+    // Fill remaining space to reach cols width
+    int remaining = cols - table_width - 1;
+    for (int i = 0; i < remaining; ++i) {
+        output << " ";
+    }
+    if (remaining >= 0) {
         output << "│";
-    }
-    // Fill remaining space
-    int used = 1;
-    for (const auto& col : columns) {
-        used += col.second + 1;
-    }
-    if (used < cols - 1) {
-        for (int i = used; i < cols - 1; ++i) {
-            output << " ";
-        }
     }
     output << "\n";
     
-    // Separator line
+    // Separator line: ├───────┼───────┼───────┤
     output << "├";
-    for (const auto& col : columns) {
-        for (int i = 0; i < col.second + 1; ++i) {
+    for (size_t i = 0; i < columns.size(); ++i) {
+        for (int j = 0; j < columns[i].second; ++j) {
             output << "─";
         }
-        output << "┼";
-    }
-    // Fill to end
-    int used2 = 1;
-    for (const auto& col : columns) {
-        used2 += col.second + 1;
-    }
-    if (used2 < cols - 1) {
-        for (int i = used2; i < cols - 1; ++i) {
-            output << "─";
+        if (i < columns.size() - 1) {
+            output << "┼";
         }
+    }
+    output << "─"; // Extra dash before final border
+    // Fill remaining
+    remaining = cols - table_width - 1;
+    for (int i = 0; i < remaining; ++i) {
+        output << "─";
     }
     output << "┤\n";
 }
 
 void TUI::draw_table_row(std::stringstream& output, const std::vector<std::string>& cells, 
                          const std::vector<int>& widths, bool is_selected, bool is_alternate) {
+    // Calculate total table width
+    int table_width = 1;
+    for (int w : widths) {
+        table_width += w + 1;
+    }
+    
     if (is_selected) {
-        output << "\033[7m"; // Reverse video
+        output << "\033[7m"; // Reverse video for selection
     } else if (is_alternate) {
-        output << "\033[90m"; // Dark gray for alternate rows
+        output << "\033[38;5;245m"; // Subtle gray for alternate rows
     }
     
     output << "│";
@@ -769,24 +850,60 @@ void TUI::draw_table_row(std::stringstream& output, const std::vector<std::strin
         std::string cell = cells[i];
         int width = widths[i];
         
-        // Truncate if needed
-        if (cell.length() > static_cast<size_t>(width - 1)) {
-            cell = cell.substr(0, width - 4) + "...";
+        // Calculate visible length
+        int vis_len = visible_length(cell);
+        
+        // Truncate if needed (leaving space for " " prefix)
+        if (vis_len > width - 1) {
+            cell = truncate_to_width(cell, width - 1);
+            vis_len = visible_length(cell);
         }
         
+        // Output cell with padding: " content    "
         output << " " << cell;
-        int padding = width - static_cast<int>(cell.length()) - 1;
+        int padding = width - vis_len - 1;
         for (int j = 0; j < padding; ++j) {
             output << " ";
         }
         output << "│";
     }
     
-    output << "\033[0m\n"; // Reset colors
+    output << "\033[0m\n"; // Reset colors and newline
+}
+
+// Helper to draw an empty row for padding
+static void draw_empty_row(std::stringstream& output, int cols) {
+    output << "│";
+    for (int i = 0; i < cols - 2; ++i) {
+        output << " ";
+    }
+    output << "│\n";
+}
+
+// Helper to draw bottom border
+static void draw_bottom_border(std::stringstream& output, int cols) {
+    output << "└";
+    for (int i = 0; i < cols - 2; ++i) {
+        output << "─";
+    }
+    output << "┘\n";
 }
 
 void TUI::draw_runways_tab(std::stringstream& output, int cols, int max_rows) {
     auto runways = get_runways_snapshot();
+    
+    // Column definitions - needed for table width calculations
+    std::vector<std::pair<std::string, int>> columns = {
+        {"ID", 30},
+        {"Status", 10},
+        {"Interface", 15},
+        {"Proxy", 25},
+        {"Latency", 12}
+    };
+    
+    // Calculate table width from columns
+    int table_width = 1; // Start with left border
+    for (const auto& col : columns) table_width += col.second + 1;
     
     // Adjust scroll to keep selected item visible
     int visible_items = max_rows - 4; // Leave space for title border (1) + header (2) + bottom border (1)
@@ -803,21 +920,18 @@ void TUI::draw_runways_tab(std::stringstream& output, int cols, int max_rows) {
     draw_table_border(output, title, cols);
     
     if (runways.empty()) {
-        output << "│ No runways discovered yet                                    │\n";
-        output << "└";
-        for (int i = 0; i < cols - 2; ++i) output << "─";
-        output << "┘\n";
+        // Empty message row
+        std::string msg = " No runways discovered yet";
+        output << "│" << msg;
+        for (size_t i = msg.length() + 1; i < static_cast<size_t>(table_width - 1); ++i) output << " ";
+        output << "│\n";
+        // Pad remaining rows to fill max_rows
+        for (int i = 0; i < max_rows - 3; ++i) {
+            draw_empty_row(output, table_width);
+        }
+        draw_bottom_border(output, table_width);
         return;
     }
-    
-    // Column definitions: Name, Width
-    std::vector<std::pair<std::string, int>> columns = {
-        {"ID", 25},
-        {"Status", 8},
-        {"Interface", 12},
-        {"Proxy", 20},
-        {"Latency", 10}
-    };
     
     draw_table_header(output, columns, cols);
     
@@ -865,25 +979,43 @@ void TUI::draw_runways_tab(std::stringstream& output, int cols, int max_rows) {
             truncate_string(runway->upstream_proxy->config.host, 18) : "-";
         
         std::vector<std::string> cells = {
-            truncate_string(runway->id, 23),
+            truncate_string(runway->id, columns[0].second - 2),
             status_color + status_symbol + "\033[0m",
-            truncate_string(runway->interface_name, 10),
+            truncate_string(runway->interface_name, columns[2].second - 2),
             proxy_str,
             "N/A" // Latency - can be calculated later
         };
         
-        std::vector<int> widths = {25, 8, 12, 20, 10};
+        std::vector<int> widths;
+        for (const auto& col : columns) widths.push_back(col.second);
         draw_table_row(output, cells, widths, is_selected, is_alternate);
     }
     
+    // Pad remaining rows if fewer items than visible_items
+    size_t items_drawn = end_idx - start_idx;
+    for (size_t i = items_drawn; i < static_cast<size_t>(visible_items); ++i) {
+        draw_empty_row(output, table_width);
+    }
+    
     // Bottom border
-    output << "└";
-    for (int i = 0; i < cols - 2; ++i) output << "─";
-    output << "┘\n";
+    draw_bottom_border(output, table_width);
 }
 
 void TUI::draw_targets_tab(std::stringstream& output, int cols, int max_rows) {
     auto targets = get_targets_snapshot();
+    
+    // Column definitions - needed for table width calculations
+    std::vector<std::pair<std::string, int>> columns = {
+        {"Target", 30},
+        {"Status", 8},
+        {"Best Runway", 25},
+        {"Success", 10},
+        {"Latency", 10}
+    };
+    
+    // Calculate table width from columns
+    int table_width = 1; // Start with left border
+    for (const auto& col : columns) table_width += col.second + 1;
     
     int visible_items = max_rows - 4; // title border (1) + header (2) + bottom border (1)
     if (visible_items < 1) visible_items = 1;
@@ -898,20 +1030,17 @@ void TUI::draw_targets_tab(std::stringstream& output, int cols, int max_rows) {
     draw_table_border(output, title, cols);
     
     if (targets.empty()) {
-        output << "│ No targets accessed yet                                      │\n";
-        output << "└";
-        for (int i = 0; i < cols - 2; ++i) output << "─";
-        output << "┘\n";
+        std::string msg = " No targets accessed yet";
+        output << "│" << msg;
+        for (size_t i = msg.length() + 1; i < static_cast<size_t>(table_width - 1); ++i) output << " ";
+        output << "│\n";
+        // Pad remaining rows to fill max_rows
+        for (int i = 0; i < max_rows - 3; ++i) {
+            draw_empty_row(output, table_width);
+        }
+        draw_bottom_border(output, table_width);
         return;
     }
-    
-    std::vector<std::pair<std::string, int>> columns = {
-        {"Target", 30},
-        {"Status", 8},
-        {"Best Runway", 25},
-        {"Success", 10},
-        {"Latency", 10}
-    };
     
     draw_table_header(output, columns, cols);
     
@@ -956,24 +1085,43 @@ void TUI::draw_targets_tab(std::stringstream& output, int cols, int max_rows) {
             (std::to_string(static_cast<int>(avg_latency * 100) / 100.0) + "s") : "N/A";
         
         std::vector<std::string> cells = {
-            truncate_string(target, 28),
+            truncate_string(target, columns[0].second - 2),
             status_color + status_symbol + "\033[0m",
             best_runway,
             std::to_string(success_rate) + "%",
             latency_str
         };
         
-        std::vector<int> widths = {30, 8, 25, 10, 10};
+        std::vector<int> widths;
+        for (const auto& col : columns) widths.push_back(col.second);
         draw_table_row(output, cells, widths, is_selected, is_alternate);
     }
     
-    output << "└";
-    for (int i = 0; i < cols - 2; ++i) output << "─";
-    output << "┘\n";
+    // Pad remaining rows if fewer items than visible_items
+    size_t items_drawn = end_idx - start_idx;
+    for (size_t i = items_drawn; i < static_cast<size_t>(visible_items); ++i) {
+        draw_empty_row(output, table_width);
+    }
+    
+    draw_bottom_border(output, table_width);
 }
 
 void TUI::draw_connections_tab(std::stringstream& output, int cols, int max_rows) {
     auto conns = get_connections_snapshot();
+    
+    // Column definitions - needed for table width calculations
+    std::vector<std::pair<std::string, int>> columns = {
+        {"Client", 18},
+        {"Target", 25},
+        {"Runway", 20},
+        {"Method", 8},
+        {"Data", 12},
+        {"Status", 8}
+    };
+    
+    // Calculate table width from columns
+    int table_width = 1; // Start with left border
+    for (const auto& col : columns) table_width += col.second + 1;
     
     int visible_items = max_rows - 4; // title border (1) + header (2) + bottom border (1)
     if (visible_items < 1) visible_items = 1;
@@ -988,21 +1136,17 @@ void TUI::draw_connections_tab(std::stringstream& output, int cols, int max_rows
     draw_table_border(output, title, cols);
     
     if (conns.empty()) {
-        output << "│ No active connections                                        │\n";
-        output << "└";
-        for (int i = 0; i < cols - 2; ++i) output << "─";
-        output << "┘\n";
+        std::string msg = " No active connections";
+        output << "│" << msg;
+        for (size_t i = msg.length() + 1; i < static_cast<size_t>(table_width - 1); ++i) output << " ";
+        output << "│\n";
+        // Pad remaining rows to fill max_rows
+        for (int i = 0; i < max_rows - 3; ++i) {
+            draw_empty_row(output, table_width);
+        }
+        draw_bottom_border(output, table_width);
         return;
     }
-    
-    std::vector<std::pair<std::string, int>> columns = {
-        {"Client", 18},
-        {"Target", 25},
-        {"Runway", 20},
-        {"Method", 8},
-        {"Data", 12},
-        {"Status", 8}
-    };
     
     draw_table_header(output, columns, cols);
     
@@ -1032,21 +1176,26 @@ void TUI::draw_connections_tab(std::stringstream& output, int cols, int max_rows
         std::string data_str = (total_bytes > 0) ? format_bytes(total_bytes) : "0 B";
         
         std::vector<std::string> cells = {
-            truncate_string(conn.client_ip + ":" + std::to_string(conn.client_port), 16),
-            truncate_string(conn.target_host + ":" + std::to_string(conn.target_port), 23),
-            truncate_string(conn.runway_id, 18),
-            truncate_string(conn.method, 6),
+            truncate_string(conn.client_ip + ":" + std::to_string(conn.client_port), columns[0].second - 2),
+            truncate_string(conn.target_host + ":" + std::to_string(conn.target_port), columns[1].second - 2),
+            truncate_string(conn.runway_id, columns[2].second - 2),
+            truncate_string(conn.method, columns[3].second - 2),
             data_str,
             status_color + status_symbol + "\033[0m"
         };
         
-        std::vector<int> widths = {18, 25, 20, 8, 12, 8};
+        std::vector<int> widths;
+        for (const auto& col : columns) widths.push_back(col.second);
         draw_table_row(output, cells, widths, is_selected, is_alternate);
     }
     
-    output << "└";
-    for (int i = 0; i < cols - 2; ++i) output << "─";
-    output << "┘\n";
+    // Pad remaining rows if fewer items than visible_items
+    size_t items_drawn = end_idx - start_idx;
+    for (size_t i = items_drawn; i < static_cast<size_t>(visible_items); ++i) {
+        draw_empty_row(output, table_width);
+    }
+    
+    draw_bottom_border(output, table_width);
 }
 
 // Old function removed - replaced by draw_command_bar
