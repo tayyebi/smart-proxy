@@ -54,3 +54,6 @@ coverage/
 # Debug files
 *.dSYM/
 *.pdb
+
+# Secret & config files
+config.json
