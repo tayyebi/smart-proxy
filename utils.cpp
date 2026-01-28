@@ -236,4 +236,13 @@ bool ensure_log_file(const std::string& log_file_path) {
     return false;
 }
 
+bool file_exists(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+    
+    struct stat info;
+    return stat(path.c_str(), &info) == 0;
+}
+
 } // namespace utils

@@ -56,6 +56,9 @@ bool create_directory(const std::string& path);
 // Ensure log directory and file exist
 bool ensure_log_file(const std::string& log_file_path);
 
+// Check if file exists
+bool file_exists(const std::string& path);
+
 } // namespace utils
 
 #endif // UTILS_H

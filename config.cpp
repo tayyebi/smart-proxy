@@ -1,4 +1,12 @@
+#include "config.h"
+#include "utils.h"
+#include <fstream>
+#include <sstream>
 #include <iomanip>
+#include <cctype>
+#include <algorithm>
+#include <map>
+
 // Helper: convert config to JSON string
 static std::string config_to_json(const Config& config) {
     std::ostringstream oss;
@@ -59,13 +67,6 @@ bool Config::save(const std::string& path) const {
     out << config_to_json(*this) << std::endl;
     return true;
 }
-#include "config.h"
-#include "utils.h"
-#include <fstream>
-#include <sstream>
-#include <cctype>
-#include <algorithm>
-#include <map>
 
 // RFC 7159 - JSON Data Interchange Format
 // This is a simplified parser for the config subset we need
