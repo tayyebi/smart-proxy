@@ -129,10 +129,11 @@ private:
     bool quit_confirmed_; // Quit confirmation flag
     
     // Layout constants - centralized for safe TUI rendering
+    // Note: Heights include separator lines where applicable
     static constexpr int STATUS_BAR_HEIGHT = 1;
-    static constexpr int TAB_BAR_HEIGHT = 1;
-    static constexpr int SUMMARY_BAR_HEIGHT = 1;
-    static constexpr int COMMAND_BAR_HEIGHT = 1;
+    static constexpr int TAB_BAR_HEIGHT = 2;      // tabs + separator
+    static constexpr int SUMMARY_BAR_HEIGHT = 2;  // separator + content
+    static constexpr int COMMAND_BAR_HEIGHT = 2;  // separator + content
     static constexpr int MIN_TERMINAL_ROWS = 15;
     static constexpr int MIN_TERMINAL_COLS = 70;
     

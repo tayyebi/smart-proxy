@@ -105,6 +105,10 @@ void TUI::setup_terminal() {
     fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
 #endif
     
+    // Switch to alternate screen buffer to prevent terminal scrolling
+    std::cout << "\033[?1049h";
+    std::cout.flush();
+    
     clear_screen();
     hide_cursor();
     
@@ -149,9 +153,11 @@ void TUI::restore_terminal() {
     fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK);
 #endif
     
-    clear_screen();
     show_cursor();
-    move_cursor(1, 1);
+    
+    // Switch back to normal screen buffer
+    std::cout << "\033[?1049l";
+    std::cout.flush();
 }
 
 void TUI::clear_screen() {
@@ -781,7 +787,7 @@ void TUI::draw_runways_tab(std::stringstream& output, int cols, int max_rows) {
     auto runways = get_runways_snapshot();
     
     // Adjust scroll to keep selected item visible
-    int visible_items = max_rows - 3; // Leave space for header and borders
+    int visible_items = max_rows - 4; // Leave space for title border (1) + header (2) + bottom border (1)
     if (visible_items < 1) visible_items = 1;
     
     if (selected_index_ < scroll_offset_) {
@@ -877,7 +883,7 @@ void TUI::draw_runways_tab(std::stringstream& output, int cols, int max_rows) {
 void TUI::draw_targets_tab(std::stringstream& output, int cols, int max_rows) {
     auto targets = get_targets_snapshot();
     
-    int visible_items = max_rows - 3;
+    int visible_items = max_rows - 4; // title border (1) + header (2) + bottom border (1)
     if (visible_items < 1) visible_items = 1;
     
     if (selected_index_ < scroll_offset_) {
@@ -967,7 +973,7 @@ void TUI::draw_targets_tab(std::stringstream& output, int cols, int max_rows) {
 void TUI::draw_connections_tab(std::stringstream& output, int cols, int max_rows) {
     auto conns = get_connections_snapshot();
     
-    int visible_items = max_rows - 3;
+    int visible_items = max_rows - 4; // title border (1) + header (2) + bottom border (1)
     if (visible_items < 1) visible_items = 1;
     
     if (selected_index_ < scroll_offset_) {
@@ -1045,7 +1051,7 @@ void TUI::draw_connections_tab(std::stringstream& output, int cols, int max_rows
 // void TUI::draw_footer_to_stream(std::stringstream& output, int cols, int /*row*/) {
 
 // Old function - replaced by draw_detail_view in tui_new.cpp
-void TUI::draw_stats_tab(std::stringstream& output, int cols, int /*max_rows*/) {
+void TUI::draw_stats_tab(std::stringstream& output, int cols, int max_rows) {
     // Use lightweight atomic counters and cached counts to avoid blocking
     // Never call expensive operations that might lock or iterate large collections
     
@@ -1080,49 +1086,102 @@ void TUI::draw_stats_tab(std::stringstream& output, int cols, int /*max_rows*/) 
     // Use atomic counter directly (no lock needed, instant)
     size_t conn_count = proxy_server_->get_active_connections();
     
-    output << "│ \033[1mOverview\033[0m";
-    for (int i = 13; i < cols - 1; ++i) output << " ";
-    output << "│\n";
-    output << "├";
-    for (int i = 0; i < cols - 2; ++i) output << "─";
-    output << "┤\n";
+    // Calculate available content lines (excluding title border and bottom border)
+    int content_lines = max_rows - 2;
+    int lines_drawn = 0;
     
-    output << "│ Runways:        " << std::setw(10) << std::left << runway_count;
-    output << " Targets:        " << std::setw(10) << std::left << target_count;
-    for (int i = 50; i < cols - 1; ++i) output << " ";
-    output << "│\n";
+    // Helper lambda to draw a line if we have space
+    auto draw_if_space = [&](const std::string& line) -> bool {
+        if (lines_drawn < content_lines) {
+            output << line;
+            lines_drawn++;
+            return true;
+        }
+        return false;
+    };
     
-    output << "│ Active Conn:    " << std::setw(10) << std::left << conn_count;
-    output << " Total Conn:     " << std::setw(10) << std::left << proxy_server_->get_total_connections();
-    for (int i = 50; i < cols - 1; ++i) output << " ";
-    output << "│\n";
+    // Overview section
+    {
+        std::stringstream ss;
+        ss << "│ \033[1mOverview\033[0m";
+        for (int i = 13; i < cols - 1; ++i) ss << " ";
+        ss << "│\n";
+        draw_if_space(ss.str());
+    }
     
-    // Use atomic counters (no blocking)
-    output << "│ Bytes Sent:    " << std::setw(10) << std::left << utils::format_bytes(proxy_server_->get_total_bytes_sent());
-    output << " Bytes Recv:     " << std::setw(10) << std::left << utils::format_bytes(proxy_server_->get_total_bytes_received());
-    for (int i = 50; i < cols - 1; ++i) output << " ";
-    output << "│\n";
+    {
+        std::stringstream ss;
+        ss << "├";
+        for (int i = 0; i < cols - 2; ++i) ss << "─";
+        ss << "┤\n";
+        draw_if_space(ss.str());
+    }
+    
+    {
+        std::stringstream ss;
+        ss << "│ Runways:        " << std::setw(10) << std::left << runway_count;
+        ss << " Targets:        " << std::setw(10) << std::left << target_count;
+        for (int i = 50; i < cols - 1; ++i) ss << " ";
+        ss << "│\n";
+        draw_if_space(ss.str());
+    }
+    
+    {
+        std::stringstream ss;
+        ss << "│ Active Conn:    " << std::setw(10) << std::left << conn_count;
+        ss << " Total Conn:     " << std::setw(10) << std::left << proxy_server_->get_total_connections();
+        for (int i = 50; i < cols - 1; ++i) ss << " ";
+        ss << "│\n";
+        draw_if_space(ss.str());
+    }
+    
+    {
+        std::stringstream ss;
+        ss << "│ Bytes Sent:    " << std::setw(10) << std::left << utils::format_bytes(proxy_server_->get_total_bytes_sent());
+        ss << " Bytes Recv:     " << std::setw(10) << std::left << utils::format_bytes(proxy_server_->get_total_bytes_received());
+        for (int i = 50; i < cols - 1; ++i) ss << " ";
+        ss << "│\n";
+        draw_if_space(ss.str());
+    }
     
     // Performance section
-    output << "│";
-    for (int i = 0; i < cols - 2; ++i) output << "─";
-    output << "│\n";
-    output << "│ \033[1mPerformance\033[0m";
-    for (int i = 15; i < cols - 1; ++i) output << " ";
-    output << "│\n";
-    output << "├";
-    for (int i = 0; i < cols - 2; ++i) output << "─";
-    output << "┤\n";
+    {
+        std::stringstream ss;
+        ss << "│";
+        for (int i = 0; i < cols - 2; ++i) ss << "─";
+        ss << "│\n";
+        draw_if_space(ss.str());
+    }
+    
+    {
+        std::stringstream ss;
+        ss << "│ \033[1mPerformance\033[0m";
+        for (int i = 15; i < cols - 1; ++i) ss << " ";
+        ss << "│\n";
+        draw_if_space(ss.str());
+    }
+    
+    {
+        std::stringstream ss;
+        ss << "├";
+        for (int i = 0; i < cols - 2; ++i) ss << "─";
+        ss << "┤\n";
+        draw_if_space(ss.str());
+    }
     
     // Calculate throughput (atomic operations only)
     uint64_t total_bytes = proxy_server_->get_total_bytes_sent() + proxy_server_->get_total_bytes_received();
     uint64_t uptime_secs = std::time(nullptr) - start_time_;
     double throughput = (uptime_secs > 0) ? (static_cast<double>(total_bytes) / uptime_secs) : 0.0;
     
-    output << "│ Throughput:     " << std::setw(10) << std::left << utils::format_bytes(static_cast<uint64_t>(throughput)) + "/s";
-    output << " Uptime:         " << std::setw(10) << std::left << format_uptime(start_time_);
-    for (int i = 50; i < cols - 1; ++i) output << " ";
-    output << "│\n";
+    {
+        std::stringstream ss;
+        ss << "│ Throughput:     " << std::setw(10) << std::left << utils::format_bytes(static_cast<uint64_t>(throughput)) + "/s";
+        ss << " Uptime:         " << std::setw(10) << std::left << format_uptime(start_time_);
+        for (int i = 50; i < cols - 1; ++i) ss << " ";
+        ss << "│\n";
+        draw_if_space(ss.str());
+    }
     
     // Routing mode (lightweight getter)
     std::string mode_str;
@@ -1137,87 +1196,122 @@ void TUI::draw_stats_tab(std::stringstream& output, int cols, int /*max_rows*/) 
         mode_str = "Unknown";
     }
     
-    output << "│ Routing Mode:   " << std::setw(10) << std::left << mode_str;
-    output << " Listen:         " << std::setw(10) << std::left << (config_.proxy_listen_host + ":" + std::to_string(config_.proxy_listen_port));
-    for (int i = 50; i < cols - 1; ++i) output << " ";
-    output << "│\n";
+    {
+        std::stringstream ss;
+        ss << "│ Routing Mode:   " << std::setw(10) << std::left << mode_str;
+        ss << " Listen:         " << std::setw(10) << std::left << (config_.proxy_listen_host + ":" + std::to_string(config_.proxy_listen_port));
+        for (int i = 50; i < cols - 1; ++i) ss << " ";
+        ss << "│\n";
+        draw_if_space(ss.str());
+    }
     
+    // Fill remaining lines if any
+    while (lines_drawn < content_lines) {
+        output << "│";
+        for (int i = 0; i < cols - 2; ++i) output << " ";
+        output << "│\n";
+        lines_drawn++;
+    }
+    
+    // Bottom border
     output << "└";
     for (int i = 0; i < cols - 2; ++i) output << "─";
     output << "┘\n";
 }
 
-void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows UNUSED_PARAM(max_rows)) {
-#ifdef _WIN32
-    (void)max_rows; // Suppress unused parameter warning on Windows
-#endif
+void TUI::draw_help_tab(std::stringstream& output, int cols, int max_rows) {
     std::string title = "Help & Shortcuts";
     draw_table_border(output, title, cols);
     
-    output << "│ \033[1mKeyboard Shortcuts\033[0m";
-    for (int i = 20; i < cols - 1; ++i) output << " ";
-    output << "│\n";
-    output << "├";
-    for (int i = 0; i < cols - 2; ++i) output << "─";
-    output << "┤\n";
+    // Build all help items as a single list for scrolling
+    std::vector<std::pair<std::string, std::string>> all_items;
     
-    std::vector<std::pair<std::string, std::string>> shortcuts = {
-        {"1-5", "Switch tabs"},
-        {"↑↓ / j/k", "Navigate items"},
-        {"←→ / h/l", "Switch tabs"},
-        {"Page Up/Down", "Scroll one page"},
-        {"Home/End", "Go to first/last item"},
-        {"Ctrl+Home/End", "Go to first/last tab"},
-        {"Space / Ctrl+F", "Page down"},
-        {"b", "Page up"},
-        {"Ctrl+D/U", "Half page down/up"},
-        {"g / gg", "Go to top (double-g)"},
-        {"G / Ctrl+G", "Go to bottom"},
-        {"Enter", "View details"},
-        {"Esc", "Back/Close details"},
-        {"Backspace/Delete", "Go up one item"},
-        {"Tab/Shift+Tab", "Switch tabs"},
-        {"q", "Quit (with confirmation)"},
-        {"Ctrl+B", "Cycle routing mode"},
-        {"F1", "Show help"},
-        {"F5", "Refresh display"},
-        {"?", "Show this help"}
-    };
+    // Header marker for Keyboard Shortcuts
+    all_items.push_back({"", "\033[1mKeyboard Shortcuts\033[0m"});
     
-    for (const auto& shortcut : shortcuts) {
-        output << "│ " << std::setw(12) << std::left << shortcut.first;
-        output << " " << shortcut.second;
-        int used = 15 + static_cast<int>(shortcut.first.length() + shortcut.second.length());
-        for (int i = used; i < cols - 1; ++i) output << " ";
+    all_items.push_back({"1-5", "Switch tabs"});
+    all_items.push_back({"↑↓ / j/k", "Navigate items"});
+    all_items.push_back({"←→ / h/l", "Switch tabs"});
+    all_items.push_back({"Page Up/Down", "Scroll one page"});
+    all_items.push_back({"Home/End", "Go to first/last item"});
+    all_items.push_back({"Enter", "View details"});
+    all_items.push_back({"Esc", "Back/Close details"});
+    all_items.push_back({"Tab/Shift+Tab", "Switch tabs"});
+    all_items.push_back({"q", "Quit (with confirmation)"});
+    all_items.push_back({"Ctrl+B", "Cycle routing mode"});
+    all_items.push_back({"?", "Show this help"});
+    
+    // Header marker for Mouse Operations
+    all_items.push_back({"", ""});  // Empty separator
+    all_items.push_back({"", "\033[1mMouse Operations\033[0m"});
+    
+    all_items.push_back({"Click Tab", "Switch to that tab"});
+    all_items.push_back({"Click Item", "Select item"});
+    all_items.push_back({"Double-click", "View details"});
+    all_items.push_back({"Scroll", "Navigate list"});
+    
+    // Calculate visible items (leave space for header border + bottom border)
+    int visible_items = max_rows - 2;  // 1 for header, 1 for bottom border
+    if (visible_items < 1) visible_items = 1;
+    
+    // Adjust scroll offset based on selected_index
+    if (selected_index_ < scroll_offset_) {
+        scroll_offset_ = selected_index_;
+    } else if (selected_index_ >= scroll_offset_ + visible_items) {
+        scroll_offset_ = selected_index_ - visible_items + 1;
+    }
+    
+    // Clamp scroll offset
+    int max_scroll = static_cast<int>(all_items.size()) - visible_items;
+    if (max_scroll < 0) max_scroll = 0;
+    if (scroll_offset_ > max_scroll) scroll_offset_ = max_scroll;
+    if (scroll_offset_ < 0) scroll_offset_ = 0;
+    
+    // Draw visible items
+    int lines_drawn = 0;
+    for (int i = scroll_offset_; i < static_cast<int>(all_items.size()) && lines_drawn < visible_items; ++i, ++lines_drawn) {
+        const auto& item = all_items[i];
+        
+        if (item.first.empty() && item.second.empty()) {
+            // Empty separator line
+            output << "│";
+            for (int j = 0; j < cols - 2; ++j) output << " ";
+            output << "│\n";
+        } else if (item.first.empty()) {
+            // Section header
+            output << "│ " << item.second;
+            // Calculate visible length (strip ANSI codes for length calculation)
+            std::string visible_text = item.second;
+            size_t pos = 0;
+            while ((pos = visible_text.find("\033[")) != std::string::npos) {
+                size_t end = visible_text.find('m', pos);
+                if (end != std::string::npos) {
+                    visible_text.erase(pos, end - pos + 1);
+                } else {
+                    break;
+                }
+            }
+            int used = 2 + static_cast<int>(visible_text.length());
+            for (int j = used; j < cols - 1; ++j) output << " ";
+            output << "│\n";
+        } else {
+            // Normal item
+            output << "│ " << std::setw(14) << std::left << item.first;
+            output << " " << item.second;
+            int used = 17 + static_cast<int>(item.second.length());
+            for (int j = used; j < cols - 1; ++j) output << " ";
+            output << "│\n";
+        }
+    }
+    
+    // Fill remaining space if content is smaller than max_rows
+    for (; lines_drawn < visible_items; ++lines_drawn) {
+        output << "│";
+        for (int i = 0; i < cols - 2; ++i) output << " ";
         output << "│\n";
     }
     
-    output << "│";
-    for (int i = 0; i < cols - 2; ++i) output << "─";
-    output << "│\n";
-    output << "│ \033[1mMouse Operations\033[0m";
-    for (int i = 18; i < cols - 1; ++i) output << " ";
-    output << "│\n";
-    output << "├";
-    for (int i = 0; i < cols - 2; ++i) output << "─";
-    output << "┤\n";
-    
-    std::vector<std::pair<std::string, std::string>> mouse_ops = {
-        {"Click Tab", "Switch to that tab"},
-        {"Click Item", "Select item"},
-        {"Double-click", "View details"},
-        {"Scroll", "Navigate list"},
-        {"Click Mode", "Cycle routing mode (in status bar)"}
-    };
-    
-    for (const auto& op : mouse_ops) {
-        output << "│ " << std::setw(15) << std::left << op.first;
-        output << " " << op.second;
-        int used = 18 + static_cast<int>(op.first.length() + op.second.length());
-        for (int i = used; i < cols - 1; ++i) output << " ";
-        output << "│\n";
-    }
-    
+    // Bottom border
     output << "└";
     for (int i = 0; i < cols - 2; ++i) output << "─";
     output << "┘\n";
@@ -1281,7 +1375,9 @@ void TUI::draw_command_bar(std::stringstream& output, int cols) {
     // Fill remaining space with background color
     fill_line_with_bg(output, used, cols, bg_color);
     
-    output << "\n";
+    // No trailing newline - this is the last line of output
+    // Adding \n here would scroll the screen up by one line
+    output << "\033[0m"; // Just reset colors
 }
 
 void TUI::draw_detail_view(std::stringstream& output, int cols, int rows) {
