@@ -357,7 +357,7 @@ void TUI::draw() {
     
     // Use centralized constants for consistent layout
     if (rows < MIN_TERMINAL_ROWS || cols < MIN_TERMINAL_COLS) {
-        std::cout << "\033[2J\033[1;1H"; // Clear and move to top
+        std::cout << "\033[H\033[J"; // Move to home and clear
         std::cout << "Terminal too small (min " << MIN_TERMINAL_COLS << "x" << MIN_TERMINAL_ROWS << ")\n";
         std::cout << "Current: " << cols << "x" << rows << "\n";
         std::cout.flush();
@@ -366,7 +366,9 @@ void TUI::draw() {
     
     // Build entire frame in stringstream for single atomic output
     std::stringstream output;
-    output << "\033[2J\033[1;1H"; // Clear screen and move to top
+    // Move cursor to home position (1,1) and clear from there to end of screen
+    // Using \033[H moves to top-left, \033[J clears from cursor to end
+    output << "\033[H\033[J";
     
     // Draw detail view if active
     if (detail_view_) {

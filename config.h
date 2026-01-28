@@ -21,6 +21,8 @@ struct DNSServerConfig {
     std::string name;
     
     DNSServerConfig() : port(53) {}
+    DNSServerConfig(const std::string& h, uint16_t p, const std::string& n) 
+        : host(h), port(p), name(n) {}
 };
 
 struct UpstreamProxyConfig {
@@ -29,6 +31,8 @@ struct UpstreamProxyConfig {
     uint16_t port;
     
     UpstreamProxyConfig() : port(0) {}
+    UpstreamProxyConfig(const std::string& type, const std::string& h, uint16_t p)
+        : proxy_type(type), host(h), port(p) {}
 };
 
 struct Config {

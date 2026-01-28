@@ -94,6 +94,14 @@ Config::Config()
     , webui_listen_port(8080)
 {
     interfaces.push_back("auto");
+    
+    // Default DNS servers
+    dns_servers.push_back(DNSServerConfig{"1.1.1.1", 53, "Cloudflare"});
+    dns_servers.push_back(DNSServerConfig{"8.8.8.8", 53, "Google"});
+    dns_servers.push_back(DNSServerConfig{"9.9.9.9", 53, "Quad9"});
+    
+    // Default upstream proxy (SOCKS5 on localhost)
+    upstream_proxies.push_back(UpstreamProxyConfig{"socks5", "127.0.0.1", 1080});
 }
 
 Config Config::load(const std::string& path) {
