@@ -677,7 +677,7 @@ std::string WebUI::handle_api_action(const std::string& body) {
             session->selected_index++;
         }
     } else if (action == "navigate_page_up") {
-        session->selected_index = std::max(0, session->selected_index - 20);
+        session->selected_index = (std::max)(0, session->selected_index - 20);
     } else if (action == "navigate_page_down") {
         int max_items = 0;
         if (session->current_tab == TUI::Tab::Runways) {
@@ -690,7 +690,7 @@ std::string WebUI::handle_api_action(const std::string& body) {
             std::vector<ConnectionInfo> conns_vec = this->get_connections_snapshot();
             max_items = static_cast<int>(conns_vec.size());
         }
-        session->selected_index = std::min(max_items - 1, session->selected_index + 20);
+        session->selected_index = (std::min)(max_items - 1, session->selected_index + 20);
     } else if (action == "switch_tab") {
         // Extract tab number from body
         size_t tab_pos = body.find("\"tab\"");
@@ -761,13 +761,17 @@ std::string WebUI::handle_api_action(const std::string& body) {
 
 std::string WebUI::get_html_page() {
     // Embedded HTML/CSS/JavaScript - terminal-inspired web UI
-    return R"(<!DOCTYPE html>
+    // Split into multiple string literals to avoid MSVC's 16380 byte limit
+    std::string html;
+    
+    // Part 1: HTML head and CSS
+    html += R"(<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Proxy Monitor</title>
-    <style>
+    <style>)
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Courier New', monospace;
@@ -882,7 +886,10 @@ std::string WebUI::get_html_page() {
         }
     </style>
 </head>
-<body>
+<body>)";
+
+    // Part 2: HTML body structure
+    html += R"(
     <div id="status-bar">
         <span>Smart Proxy Monitor</span>
         <span id="status-info">Loading...</span>
@@ -898,7 +905,10 @@ std::string WebUI::get_html_page() {
     <div id="summary-bar">Stats: <span id="summary-text">Loading...</span></div>
     <div id="command-bar">[1-5] Tabs  [↑↓] Navigate  [Enter] Details  [Esc] Back  [Ctrl+B] Mode</div>
     
-    <script>
+    <script>)";
+
+    // Part 3: JavaScript - API calls
+    html += R"(
         let sessionId = null;
         let currentTab = 0;
         let selectedIndex = 0;
@@ -994,7 +1004,10 @@ std::string WebUI::get_html_page() {
             }
         }
         
-        // Rendering
+        // Rendering)";
+
+    // Part 4: JavaScript - Rendering functions
+    html += R"(
         function renderRunways(data) {
             if (!data || !data.runways) return;
             let html = '<table><tr><th>ID</th><th>Status</th><th>Interface</th><th>Proxy</th><th>Latency</th></tr>';
@@ -1090,7 +1103,10 @@ std::string WebUI::get_html_page() {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
-        }
+        })";
+
+    // Part 5: JavaScript - Update display and event handlers
+    html += R"(
         
         // Update display
         async function updateDisplay() {
@@ -1125,7 +1141,10 @@ std::string WebUI::get_html_page() {
             }
         }
         
-        // Event handlers
+        // Event handlers)";
+
+    // Part 6: JavaScript - Event handlers and initialization
+    html += R"(
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', async () => {
                 const tabNum = parseInt(tab.dataset.tab);
@@ -1201,4 +1220,6 @@ std::string WebUI::get_html_page() {
     </script>
 </body>
 </html>)";
+
+    return html;
 }

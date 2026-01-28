@@ -653,7 +653,7 @@ void TUI::draw_tab_bar(std::stringstream& output, int cols) {
         
         std::string tab_text = " " + tabs[i].first + " ";
         output << tab_text;
-        tab_width_used += tab_text.length();
+        tab_width_used += static_cast<int>(tab_text.length());
         
         output << "\033[0m";
     }
